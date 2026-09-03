@@ -11,7 +11,7 @@ The system turns an autonomous research loop into a visible, reproducible workfl
 1. An agent proposes a hypothesis.
 2. The platform branches the hypothesis from the latest champion.
 3. One or more trial branches attempt the idea or repair failures.
-4. Scripts run in isolated Git worktrees and containers.
+4. Trusted scripts initially run in dedicated Git worktrees and Python virtual environments.
 5. A protected evaluator emits structured metrics.
 6. A metric gate accepts or rejects the candidate.
 7. Accepted candidates are rebased, re-evaluated, and merged into `main`.
@@ -34,7 +34,7 @@ The system turns an autonomous research loop into a visible, reproducible workfl
 - PostgreSQL for the rebuildable query projection
 - Temporal for durable workflow execution, retries, and cancellation
 - Git CLI and Git worktrees for hypotheses and trials
-- Podman for isolated script execution
+- Podman later, when untrusted or autonomous script execution requires stronger isolation
 - Hermes Agent and AutoResearchClaw for research behavior
 - Model Context Protocol for tool nodes and workflow interoperability
 - Forgejo when a self-hosted Git collaboration layer is needed

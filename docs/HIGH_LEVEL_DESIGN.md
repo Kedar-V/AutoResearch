@@ -1,7 +1,7 @@
 # AutoResearch High-Level Design
 
 - **Status:** Draft
-- **Version:** 0.1
+- **Version:** 0.2
 - **Last updated:** 2026-09-03
 
 ## 1. Purpose
@@ -44,7 +44,7 @@ flowchart LR
     Temporal --> Worker[Execution worker]
     Worker --> Hermes[Hermes / AutoResearchClaw]
     Worker --> MCP[MCP tools]
-    Worker --> Runtime[Podman script runtime]
+    Worker --> Runtime[Local script runner]
     Worker --> Git[(Git repository + worktrees)]
     Git --> Projector[Git projector]
     Projector --> SQL[(PostgreSQL)]
@@ -101,18 +101,20 @@ Temporal history is operational state. Terminal research results must be written
 
 ### 5.4 Execution workers
 
-**Technology:** Python workers, Git worktrees, Podman.
+**MVP technology:** Python worker, Git worktrees, and per-project Python virtual environments.
 
 Responsibilities:
 
 - Allocate an isolated worktree for each active hypothesis or trial.
 - Materialize declared inputs and environment configuration.
-- Execute scripts inside resource-constrained containers.
+- Execute trusted scripts as local subprocesses inside their assigned worktrees and virtual environments.
 - Capture stdout, stderr, exit code, duration, resource usage, and artifacts.
 - Validate evaluator output against its declared JSON Schema.
 - Commit code changes and append structured Git records.
 
-Untrusted trial code runs without host credentials. Network access, mounts, CPU, memory, GPU, and wall-clock limits are explicit node policy.
+The MVP runner is intentionally simple and is suitable only for trusted scripts. It enforces working-directory boundaries, explicit environment variables, output capture, and wall-clock timeouts, but it is not a security sandbox.
+
+Rootless Podman becomes the execution boundary in the hardening milestone, before the platform permits untrusted scripts or unattended autonomous execution. At that point network access, mounts, CPU, memory, process count, disk, GPU, and wall-clock limits become explicit node policy.
 
 ### 5.5 Research agent
 
@@ -244,17 +246,27 @@ Re-evaluation after rebasing prevents promotion based on an obsolete baseline.
 
 ## 10. Security boundaries
 
-- Run trial scripts in rootless Podman containers.
-- Default to no network access and read-only base filesystems.
-- Mount only the assigned worktree and declared artifact paths.
-- Apply CPU, memory, process, disk, GPU, and time limits.
-- Keep model, Git, and MCP credentials outside trial containers.
+For the trusted-script MVP:
+
+- Run each trial in its own Git worktree and project virtual environment.
+- Pass an explicit environment allowlist rather than inheriting the full host environment.
+- Apply wall-clock timeouts and terminate child process groups on cancellation.
+- Do not execute third-party or otherwise untrusted scripts.
+- Keep model, Git, and MCP credentials out of script environments unless explicitly required.
 - Redact secrets from logs before persistence.
 - Protect `main`, evaluator paths, and research note refs.
 
+Future Podman hardening adds:
+
+- Rootless containers for every trial.
+- No network access and read-only base filesystems by default.
+- Mounts limited to the assigned worktree and declared artifact paths.
+- CPU, memory, process, disk, GPU, and wall-clock limits.
+- Disposable environments and image-based dependency reproducibility.
+
 ## 11. Deployment model
 
-The first deployment is a single-machine Podman Compose environment:
+The MVP is a single-machine development deployment with ordinary local processes:
 
 ```text
 web
@@ -262,11 +274,11 @@ api
 worker
 projector
 postgres
-temporal
-temporal-ui
 hermes
 artifact-volume
 ```
+
+The MVP worker executes one workflow sequentially. Services may be launched directly during development. Temporal is added in Milestone 4, and Podman Compose becomes a packaging option only after container isolation is introduced.
 
 Later, workers can move to separate GPU hosts while retaining the same API and Git contracts.
 
@@ -285,7 +297,7 @@ Later, workers can move to separate GPU hosts while retaining the same API and G
 - Establish `main` as the protected champion branch.
 - Define versioned schemas for workflows, hypotheses, evaluations, and decisions.
 - Implement branch, worktree, notes, tags, and promotion operations.
-- Execute one local script and evaluator sequentially.
+- Execute trusted local scripts and evaluators sequentially in worktrees and virtual environments.
 - Project the resulting Git state into PostgreSQL.
 
 ### Milestone 2: Executable canvas
@@ -304,10 +316,16 @@ Later, workers can move to separate GPU hosts while retaining the same API and G
 ### Milestone 4: Durable parallel execution
 
 - Adopt Temporal for recovery, retries, cancellation, and parallel trials.
-- Add Podman isolation and resource policies.
 - Add serialized rebase/re-evaluate/merge promotion.
 
-### Milestone 5: Collaboration and scale
+### Milestone 5: Execution hardening
+
+- Add rootless Podman isolation and resource policies.
+- Disable network access by default and allow only declared mounts.
+- Introduce versioned execution images and reproducible dependency environments.
+- Permit untrusted or unattended autonomous script execution only after isolation tests pass.
+
+### Milestone 6: Collaboration and scale
 
 - Deploy Forgejo and protect relevant refs and paths.
 - Add authentication, authorization, remote workers, GPU scheduling, and shared artifact storage.
@@ -324,6 +342,7 @@ Later, workers can move to separate GPU hosts while retaining the same API and G
 | Re-evaluate after rebase | Promotion is always measured against the latest champion. |
 | Keep large artifacts outside normal Git | Avoid repository bloat while retaining cryptographic provenance. |
 | Delay Temporal until the vertical slice works | Validate Git semantics before adding distributed complexity. |
+| Delay Podman until execution hardening | Keep the MVP simple while making the trust boundary explicit. |
 
 ## 15. Open questions
 
