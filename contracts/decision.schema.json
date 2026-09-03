@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://autoresearch.local/schemas/decision/v1",
+  "title": "AutoResearch promotion decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "trial_id", "candidate_commit", "baseline_commit", "outcome", "reason", "created_at"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "trial_id": { "type": "string", "pattern": "^H[0-9]{4,}/T[0-9]{3,}$" },
+    "candidate_commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "baseline_commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "outcome": { "enum": ["accepted", "rejected", "blocked", "failed"] },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

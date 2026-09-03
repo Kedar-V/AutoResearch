@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Runtime state
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite3
+.autoresearch/
+artifacts/
+worktrees/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
