@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://autoresearch.local/schemas/workflow/v1",
+  "title": "AutoResearch workflow",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "name", "nodes", "edges"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "description": { "type": "string", "maxLength": 1000, "default": "" },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/edge" }
+    }
+  },
+  "$defs": {
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "name", "position", "config"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "type": {
+          "enum": ["hypothesis", "trial", "script", "evaluation", "metric_gate", "git_decision"]
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "position": { "$ref": "#/$defs/position" },
+        "config": { "type": "object" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "source", "target"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "source": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 },
+        "source_port": { "type": "string", "default": "output" },
+        "target_port": { "type": "string", "default": "input" }
+      }
+    }
+  }
+}
