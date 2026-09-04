@@ -190,7 +190,9 @@ def test_candidate_cannot_modify_protected_evaluator(
     assert git(project_repo, "show", "master:eval.py") == "trusted"
 
 
-def test_mvp_lifecycle_smoke_test(session: Session, project_repo: Path, tmp_path: Path) -> None:
+def test_mvp_lifecycle_smoke_test(
+    session: Session, project_repo: Path, tmp_path: Path
+) -> None:
     runtime_root = tmp_path / "runtime"
     accepted = execute(
         session,
@@ -201,7 +203,9 @@ def test_mvp_lifecycle_smoke_test(session: Session, project_repo: Path, tmp_path
 
     assert accepted.status == "succeeded"
     assert git(project_repo, "branch", "--list", "hypothesis/H0001-*")
-    assert "trial/H0001/T001" in git(project_repo, "branch", "--list", "trial/H0001/T001")
+    assert "trial/H0001/T001" in git(
+        project_repo, "branch", "--list", "trial/H0001/T001"
+    )
     assert (runtime_root / "worktrees" / "H0001" / "T001").is_dir()
     metric = session.scalar(select(Metric).where(Metric.run_id == accepted.id))
     assert metric is not None and (metric.name, metric.value) == ("score", 0.5)
@@ -209,9 +213,14 @@ def test_mvp_lifecycle_smoke_test(session: Session, project_repo: Path, tmp_path
     git_service = GitService(project_repo, runtime_root, "master")
     assert git_service.read_note("research/evaluations", candidate_commit) is not None
     assert git_service.read_note("research/decisions", candidate_commit) is not None
-    assert git(project_repo, "tag", "--list", "accepted/H0001-T001") == "accepted/H0001-T001"
+    assert (
+        git(project_repo, "tag", "--list", "accepted/H0001-T001")
+        == "accepted/H0001-T001"
+    )
     assert git(project_repo, "show", "master:score.txt") == "0.5"
-    champion = git_service.read_note("research/champions", git(project_repo, "rev-parse", "master"))
+    champion = git_service.read_note(
+        "research/champions", git(project_repo, "rev-parse", "master")
+    )
     assert champion is not None and champion["metrics"] == {"score": 0.5}
 
     master_after_accept = git(project_repo, "rev-parse", "master")
@@ -222,7 +231,10 @@ def test_mvp_lifecycle_smoke_test(session: Session, project_repo: Path, tmp_path
         workflow_definition("smoke-rejected", candidate_score=0.75, baseline=99.0),
     )
     assert rejected.status == "succeeded"
-    assert git(project_repo, "tag", "--list", "rejected/H0002-T001") == "rejected/H0002-T001"
+    assert (
+        git(project_repo, "tag", "--list", "rejected/H0002-T001")
+        == "rejected/H0002-T001"
+    )
     assert git(project_repo, "rev-parse", "master") == master_after_accept
 
     (project_repo / "eval.py").write_text("trusted\n", encoding="utf-8")
@@ -239,7 +251,9 @@ def test_mvp_lifecycle_smoke_test(session: Session, project_repo: Path, tmp_path
     assert protected.status == "failed"
     assert "modified protected paths: eval.py" in (protected.error or "")
     evaluation_run = next(
-        node_run for node_run in protected.node_runs if node_run.node_type == "evaluation"
+        node_run
+        for node_run in protected.node_runs
+        if node_run.node_type == "evaluation"
     )
     assert evaluation_run.status == "failed"
     assert "modified protected paths: eval.py" in evaluation_run.stderr
