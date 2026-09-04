@@ -1,88 +1,79 @@
 # AutoResearch
 
-AutoResearch is a Git-native platform for running closed-loop research from a visual workflow canvas.
+AutoResearch is a local, Git-native MVP for executable research workflows. Its React Flow whiteboard creates and connects hypothesis, trial, script, evaluation, metric-gate, and Git-decision nodes. The FastAPI control plane saves workflows in SQL and executes trusted local scripts sequentially in Git worktrees.
 
-Researchers compose agents, scripts, evaluators, metric gates, MCP tools, and Git operations as nodes on a whiteboard. The platform executes the graph, records every hypothesis and trial in Git, and promotes only measurable improvements to the project’s champion branch.
+An improving candidate is committed on a trial branch, evaluated by a protected script, tagged, merged into the configured champion branch, and recorded as the new champion. Rejected and failed trials retain their branches, tags, and Git notes.
 
-## What we are building
+## Architecture
 
-The system turns an autonomous research loop into a visible, reproducible workflow:
+The MVP consists of the React Flow frontend, FastAPI/SQLAlchemy control plane, trusted local runner, native Git CLI/worktrees, contract schemas, and SQLite by default. See the [High-Level Design](docs/HIGH_LEVEL_DESIGN.md) for the full architecture and later milestones.
 
-1. An agent proposes a hypothesis.
-2. The platform branches the hypothesis from the latest champion.
-3. One or more trial branches attempt the idea or repair failures.
-4. Trusted scripts initially run in dedicated Git worktrees and Python virtual environments.
-5. A protected evaluator emits structured metrics.
-6. A metric gate accepts or rejects the candidate.
-7. Accepted candidates are rebased, re-evaluated, and merged into `main`.
-8. The next hypothesis starts from the improved `main`.
+Git is authoritative for source, workflow lineage, hypothesis/evaluation/decision/champion notes, tags, and promotion history. SQL stores the queryable runtime projection: workflow definitions, runs, node runs, and metrics. SQLite is zero-setup; PostgreSQL remains supported for a production-shaped deployment.
 
-## Product principles
+## Branch Model
 
-- **Git is the research ledger.** Code, lineage, metrics, decisions, and promotion history are reproducible from the repository.
-- **SQL is a projection.** PostgreSQL makes the UI responsive but can be rebuilt from Git.
-- **The canvas is executable.** Nodes represent real scripts or services; typed edges represent data flow.
-- **Evaluation is protected.** A candidate cannot silently change the evaluator that judges it.
-- **Promotion is evidence-based.** Only candidates that beat the current champion under the configured policy reach `main`.
-- **The agent is replaceable.** Hermes is the initial research agent, connected through explicit APIs and MCP contracts.
-- **The stack is self-hostable.** Core components are free and open source.
-
-## Proposed stack
-
-- React, TypeScript, Vite, and React Flow for the workflow canvas
-- FastAPI, Pydantic, SQLAlchemy, and Alembic for the control plane
-- PostgreSQL for the rebuildable query projection
-- Temporal for durable workflow execution, retries, and cancellation
-- Git CLI and Git worktrees for hypotheses and trials
-- Podman later, when untrusted or autonomous script execution requires stronger isolation
-- Hermes Agent and AutoResearchClaw for research behavior
-- Model Context Protocol for tool nodes and workflow interoperability
-- Forgejo when a self-hosted Git collaboration layer is needed
-
-## Initial node catalog
-
-- Agent
-- Create Hypothesis
-- Create Trial
-- Python Script
-- Shell Script
-- Evaluation Script
-- MCP Tool
-- Condition / Metric Gate
-- Loop / Retry
-- Git Commit
-- Accept / Reject
-- Merge Champion
-- Artifact
-- Human Approval
-
-Every node input and output is described with JSON Schema. The editor permits a connection only when its source and destination schemas are compatible.
-
-## Repository status
-
-The project is currently in the architecture and foundation phase. The first implementation milestone is a local, single-user vertical slice:
+The configured champion branch defaults to `master` for this repository:
 
 ```text
-canvas -> hypothesis branch -> trial worktree -> script -> evaluator
-       -> metric gate -> Git decision record -> accept/reject
-```
-
-See the [High-Level Design](docs/HIGH_LEVEL_DESIGN.md) for component boundaries, Git semantics, data ownership, and the delivery plan.
-
-## Branching convention
-
-The target convention is:
-
-```text
-main
-├── hypothesis/H0001-short-description
-│   ├── trial/H0001/T001
-│   └── trial/H0001/T002
-└── hypothesis/H0002-short-description
+master
+├── hypothesis/H0001-improve-score
+│   └── trial/H0001/T001
+└── hypothesis/H0002-improve-score
     └── trial/H0002/T001
 ```
 
-The repository currently uses `master` as its default branch. It will be migrated to `main` before implementation work begins so the repository matches the promotion model described above.
+The system creates `accepted/H0001-T001`, `rejected/H0002-T001`, or `failed/...` tags and writes structured records to `refs/notes/research/*`.
+
+## Prerequisites
+
+- Python 3.11 or newer and `uv`
+- Node.js 20 or newer and npm
+- Git configured with a user name and email in every target repository
+
+## Installation And Running
+
+```sh
+make backend-install
+make frontend-install
+make backend-dev
+make frontend-dev
+```
+
+The API listens on `http://localhost:8000`; Vite serves the canvas at `http://localhost:5173`. Open the canvas, drag node types from the palette, connect ports, edit node JSON in the inspector, then save or run the workflow.
+
+## Target Configuration
+
+Set these before starting the API, pointing `AUTORESEARCH_PROJECT_ROOT` at a clean Git repository whose champion branch exists:
+
+```sh
+export AUTORESEARCH_DATABASE_URL='sqlite:///./autoresearch.db'
+export AUTORESEARCH_PROJECT_ROOT="$PWD/examples/basic-research"
+export AUTORESEARCH_RUNTIME_ROOT="$PWD/.autoresearch"
+export AUTORESEARCH_CHAMPION_BRANCH='master'
+export AUTORESEARCH_ALLOWED_ORIGINS='http://localhost:5173'
+export AUTORESEARCH_SCRIPT_TIMEOUT_SECONDS='300'
+export AUTORESEARCH_PROTECTED_PATHS='eval.py,tests,.research'
+```
+
+For PostgreSQL, use a SQLAlchemy PostgreSQL URL such as `postgresql+psycopg://user:password@localhost/autoresearch` and install the `postgres` extra through `make backend-install`. `AUTORESEARCH_ALLOWED_ORIGINS` and `AUTORESEARCH_PROTECTED_PATHS` accept comma-separated values.
+
+## Example
+
+[`examples/basic-research`](examples/basic-research) is a small target project. Initialize it as a Git repository on `master`, configure the target variables above, save [`research-loop.json`](examples/basic-research/research-loop.json) through the API or canvas, and run it. The included candidate changes `score.txt` from `1.0` to `0.5`; its minimize gate accepts it. Change `train.py` to write a worse value such as `1.5` to see a rejected trial that leaves `master` unchanged. The evaluator must print `{"metrics": {"score": <number>}}`.
+
+## Testing
+
+```sh
+make contracts
+make test
+make check
+```
+
+`make check` validates contracts, backend lint/tests including the real-Git lifecycle smoke test, frontend lint/tests/build, root contract tests, and Git whitespace.
+
+## Deferred Features
+
+Hermes automation, Podman isolation, Temporal orchestration, distributed workers, MCP tool execution, parallel scheduling, and autonomous repair loops are deferred. The MVP runner is for trusted local scripts only; it is not a security sandbox.
 
 ## License
 

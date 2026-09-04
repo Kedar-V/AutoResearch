@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "id": "basic-research-loop",
+  "name": "Basic research loop",
+  "description": "Improve the tracked score with a protected evaluator.",
+  "nodes": [
+    {"id": "hypothesis", "type": "hypothesis", "name": "Improve score", "position": {"x": 0, "y": 0}, "config": {"title": "Improve score", "description": "Try a lower score."}},
+    {"id": "trial", "type": "trial", "name": "Create trial", "position": {"x": 250, "y": 0}, "config": {"number": 1}},
+    {"id": "script", "type": "script", "name": "Train candidate", "position": {"x": 500, "y": 0}, "config": {"command": ["python", "train.py"], "timeout_seconds": 30, "commit_message": "trial: improve score"}},
+    {"id": "evaluation", "type": "evaluation", "name": "Evaluate candidate", "position": {"x": 750, "y": 0}, "config": {"command": ["python", "eval.py"], "timeout_seconds": 30, "protected_paths": ["eval.py", "tests", ".research"]}},
+    {"id": "gate", "type": "metric_gate", "name": "Accept improvement", "position": {"x": 1000, "y": 0}, "config": {"metric": "score", "direction": "minimize", "baseline": 1.0, "min_delta": 0.01}},
+    {"id": "decision", "type": "git_decision", "name": "Record decision", "position": {"x": 1250, "y": 0}, "config": {}}
+  ],
+  "edges": [
+    {"id": "hypothesis-to-trial", "source": "hypothesis", "target": "trial", "source_port": "output", "target_port": "input"},
+    {"id": "trial-to-script", "source": "trial", "target": "script", "source_port": "output", "target_port": "input"},
+    {"id": "script-to-evaluation", "source": "script", "target": "evaluation", "source_port": "output", "target_port": "input"},
+    {"id": "evaluation-to-gate", "source": "evaluation", "target": "gate", "source_port": "output", "target_port": "input"},
+    {"id": "gate-to-decision", "source": "gate", "target": "decision", "source_port": "output", "target_port": "input"}
+  ]
+}

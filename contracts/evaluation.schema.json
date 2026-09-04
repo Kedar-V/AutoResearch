@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://autoresearch.local/schemas/evaluation/v1",
+  "title": "AutoResearch evaluation record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "trial_id", "candidate_commit", "evaluator_commit", "status", "metrics", "created_at"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "trial_id": { "type": "string", "pattern": "^H[0-9]{4,}/T[0-9]{3,}$" },
+    "candidate_commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "evaluator_commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "status": { "enum": ["passed", "failed", "invalid"] },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "duration_seconds": { "type": "number", "minimum": 0 },
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}
