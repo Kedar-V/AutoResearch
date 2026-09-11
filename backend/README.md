@@ -35,11 +35,14 @@ restart. See HLD §6 and `frontend/src/recipe.ts`.
 Evaluation commands must print exactly one JSON object to stdout:
 
 ```json
-{"metrics": {"score": 0.42, "latency_ms": 12.7}}
+{"metrics": {"score": 0.42}}
 ```
 
-Metric values must be numbers. Eval script nodes reject candidates that modify
-configured protected paths before the evaluator runs.
+Metric values must be numbers. Additional metric keys are allowed for logging
+and the evaluation agent, but the **metric_gate** node selects a single
+`metric` + `direction` + `min_delta` (MVP is not multi-objective). Eval script
+nodes reject candidates that modify configured protected paths before the
+evaluator runs.
 
 ## Ports
 

@@ -1,7 +1,7 @@
 # AutoResearch High-Level Design
 
 - **Status:** Current architecture (shipped MVP)
-- **Version:** 0.4
+- **Version:** 0.5
 - **Last updated:** 2026-09-11
 
 This document describes the **running system**. Deferred / target platform ideas
@@ -260,9 +260,16 @@ If the champion advanced underfoot, merge fails with “champion advanced”
 ## 8. Evaluation integrity
 
 - Eval scripts and protected paths are not writable by candidates.
-- Eval stdout must be a single JSON object with numeric `metrics`.
-- Gate: maximize or minimize with `min_delta` against live champion baseline
-  when available.
+- Eval stdout must be a single JSON object with numeric `metrics` (any number of
+  named metrics may be emitted for logging / agent judgment).
+- **MVP metric gate is single-objective only:** exactly one configured
+  `metric` + `direction` (`minimize` | `maximize`) + `min_delta`, compared to
+  the live champion baseline for that metric when available. This matches
+  `contracts/evaluation.schema.json` (`primary_metric`, `direction`) and the
+  example gate in `examples/basic-research/research-loop.json`.
+- Multi-objective, Pareto fronts, threshold bands with tolerances, and
+  statistical-significance policies are **not** MVP behavior (design/deferred
+  only).
 - Malformed eval / gate failure never merges.
 
 ## 9. Failure handling
@@ -321,6 +328,8 @@ Not shipped; do not treat as current architecture:
 - Hermes / AutoResearchClaw as primary agent.
 - MCP tool nodes; Podman untrusted isolation.
 - Rebase → re-eval → merge queue when champion advances.
+- Multi-objective / Pareto / tolerance-band / statistical gate policies
+  (MVP remains one primary metric + direction + `min_delta`).
 - Content-addressed artifacts; Forgejo multi-user hosting.
 - OpenTelemetry / Prometheus service metrics stack.
 - Configurable trial ancestry (`sibling` / `chained` / `last_runnable`).

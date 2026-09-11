@@ -11,7 +11,7 @@ The MVP proves one complete research loop on a trusted local repository.
 - Hypothesis and trial branches from the configured champion branch (`master` by default)
 - Dedicated Git worktrees for trial execution; `allowed_paths` on the execution node
 - Trusted local subprocess execution with explicit environment and timeout controls
-- Structured evaluator output and a maximize/minimize metric gate
+- Structured evaluator output and a **single primary** maximize/minimize metric gate (`metric` + `direction` + `min_delta`); eval JSON may include extra metrics for display/agents, but the gate does not combine them
 - Git-backed hypothesis, evaluation, decision, and champions notes + decision tags
 - PostgreSQL as preferred SoR (projects, workflows, runs, hypotheses, trials, chat handoff); SQLite for tests
 - Optional Cursor/OpenAI agents: planner (`use_planner`), execution edits (`use_agent`), evaluation judgments (`use_agent` + optional explainability schema)
@@ -32,6 +32,7 @@ The MVP proves one complete research loop on a trusted local repository.
 - MCP tool nodes
 - Automatic rebase → re-eval → merge when the champion advances underfoot
 - Configurable trial ancestry (`sibling` / `chained` / `last_runnable`)
+- Multi-objective, Pareto, threshold-with-tolerance, or statistical-significance gate policies
 - Multi-user authentication and real-time collaboration
 - Remote GPU scheduling
 - External content-addressed artifact storage
