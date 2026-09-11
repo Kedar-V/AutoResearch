@@ -2,20 +2,148 @@
   "schema_version": "1",
   "id": "basic-research-loop",
   "name": "Basic research loop",
-  "description": "Improve the tracked score with a protected evaluator.",
+  "description": "Minimize score across hypotheses with gate-driven champion feedback.",
   "nodes": [
-    {"id": "hypothesis", "type": "hypothesis", "name": "Improve score", "position": {"x": 0, "y": 0}, "config": {"title": "Improve score", "description": "Try a lower score."}},
-    {"id": "trial", "type": "trial", "name": "Create trial", "position": {"x": 250, "y": 0}, "config": {"number": 1}},
-    {"id": "script", "type": "script", "name": "Train candidate", "position": {"x": 500, "y": 0}, "config": {"command": ["python", "train.py"], "timeout_seconds": 30, "commit_message": "trial: improve score"}},
-    {"id": "evaluation", "type": "evaluation", "name": "Evaluate candidate", "position": {"x": 750, "y": 0}, "config": {"command": ["python", "eval.py"], "timeout_seconds": 30, "protected_paths": ["eval.py", "tests", ".research"]}},
-    {"id": "gate", "type": "metric_gate", "name": "Accept improvement", "position": {"x": 1000, "y": 0}, "config": {"metric": "score", "direction": "minimize", "baseline": 1.0, "min_delta": 0.01}},
-    {"id": "decision", "type": "git_decision", "name": "Record decision", "position": {"x": 1250, "y": 0}, "config": {}}
+    {
+      "id": "hypothesis",
+      "type": "hypothesis",
+      "name": "Improve score",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "config": {
+        "title": "Lower the score",
+        "description": "Reduce score.txt by one each accepted hypothesis.",
+        "system_prompt": "Produce a concrete next experiment for score.txt. Use the last history_window hypotheses: reuse what worked, avoid what did not. Name exact edits and the expected metric effect.",
+        "model": "composer-2.5",
+        "max_retries": 1,
+        "max_hypotheses": 5,
+        "history_window": 10
+      }
+    },
+    {
+      "id": "execution",
+      "type": "execution",
+      "name": "Train candidate",
+      "position": {
+        "x": 280,
+        "y": 0
+      },
+      "config": {
+        "command": [
+          "python",
+          "train.py"
+        ],
+        "timeout_seconds": 30,
+        "commit_message": "trial: decrement score"
+      }
+    },
+    {
+      "id": "eval_script",
+      "type": "eval_script",
+      "name": "Evaluate candidate",
+      "position": {
+        "x": 280,
+        "y": 180
+      },
+      "config": {
+        "command": [
+          "python",
+          "eval.py"
+        ],
+        "timeout_seconds": 30,
+        "protected_paths": [
+          "eval.py",
+          "tests",
+          ".research"
+        ]
+      }
+    },
+    {
+      "id": "evaluation",
+      "type": "evaluation",
+      "name": "Evaluation agent",
+      "position": {
+        "x": 560,
+        "y": 0
+      },
+      "config": {
+        "system_prompt": "Summarize metric movement.",
+        "model": "composer-2.5"
+      }
+    },
+    {
+      "id": "gate",
+      "type": "metric_gate",
+      "name": "Accept improvement",
+      "position": {
+        "x": 840,
+        "y": 0
+      },
+      "config": {
+        "metric": "score",
+        "direction": "minimize",
+        "baseline": 5.0,
+        "min_delta": 0.01
+      }
+    },
+    {
+      "id": "decision",
+      "type": "git_decision",
+      "name": "Record decision",
+      "position": {
+        "x": 1120,
+        "y": 0
+      },
+      "config": {}
+    },
+    {
+      "id": "database",
+      "type": "database",
+      "name": "DB",
+      "position": {
+        "x": 560,
+        "y": 220
+      },
+      "config": {}
+    }
   ],
   "edges": [
-    {"id": "hypothesis-to-trial", "source": "hypothesis", "target": "trial", "source_port": "output", "target_port": "input"},
-    {"id": "trial-to-script", "source": "trial", "target": "script", "source_port": "output", "target_port": "input"},
-    {"id": "script-to-evaluation", "source": "script", "target": "evaluation", "source_port": "output", "target_port": "input"},
-    {"id": "evaluation-to-gate", "source": "evaluation", "target": "gate", "source_port": "output", "target_port": "input"},
-    {"id": "gate-to-decision", "source": "gate", "target": "decision", "source_port": "output", "target_port": "input"}
+    {
+      "id": "hypothesis-to-execution",
+      "source": "hypothesis",
+      "target": "execution"
+    },
+    {
+      "id": "execution-to-evaluation",
+      "source": "execution",
+      "target": "evaluation"
+    },
+    {
+      "id": "eval-script-to-evaluation",
+      "source": "eval_script",
+      "target": "evaluation"
+    },
+    {
+      "id": "evaluation-to-gate",
+      "source": "evaluation",
+      "target": "gate"
+    },
+    {
+      "id": "gate-to-decision",
+      "source": "gate",
+      "target": "decision"
+    },
+    {
+      "id": "execution-to-hypothesis",
+      "source": "execution",
+      "target": "hypothesis"
+    },
+    {
+      "id": "decision-to-hypothesis",
+      "source": "decision",
+      "target": "hypothesis"
+    }
   ]
 }

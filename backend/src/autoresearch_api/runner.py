@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SAFE_ENV_KEYS = ("PATH", "LANG", "LC_ALL", "TMPDIR", "VIRTUAL_ENV")
+from .run_control import RunCancelled, get_controller
+
+# Intentionally omit VIRTUAL_ENV so project commands use their own .venv
+# (e.g. via `uv run`) instead of the API server's environment.
+SAFE_ENV_KEYS = ("PATH", "LANG", "LC_ALL", "TMPDIR", "HOME", "USER", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
 
 
 class RunnerError(RuntimeError):
@@ -35,32 +39,65 @@ class LocalRunner:
         *,
         environment: dict[str, str] | None = None,
         timeout_seconds: int | None = None,
+        run_id: str | None = None,
     ) -> CommandResult:
         if not command or not all(isinstance(part, str) and part for part in command):
             raise RunnerError("command must be a non-empty list of strings")
         env = {key: os.environ[key] for key in SAFE_ENV_KEYS if key in os.environ}
         env.update(environment or {})
         started = time.monotonic()
+        timeout = self.default_timeout_seconds if timeout_seconds is None else timeout_seconds
+        controller = get_controller(run_id) if run_id else None
         try:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=cwd.resolve(),
                 env=env,
                 text=True,
-                capture_output=True,
-                timeout=timeout_seconds or self.default_timeout_seconds,
-                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 start_new_session=True,
             )
-        except subprocess.TimeoutExpired as exc:
-            raise RunnerError(f"command timed out after {exc.timeout} seconds") from exc
-        return CommandResult(
-            command=command,
-            returncode=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            duration_seconds=time.monotonic() - started,
-        )
+        except OSError as exc:
+            raise RunnerError(f"failed to start command: {exc}") from exc
+
+        if controller is not None:
+            controller.register_process(process)
+
+        stdout = ""
+        stderr = ""
+        try:
+            while True:
+                if controller is not None and controller.is_cancel_requested():
+                    controller.kill_process()
+                    raise RunCancelled("Cancelled by operator")
+                elapsed = time.monotonic() - started
+                if timeout is not None and elapsed >= timeout:
+                    if controller is not None:
+                        controller.kill_process()
+                    else:
+                        _kill_popen(process)
+                    raise RunnerError(f"command timed out after {timeout} seconds")
+                poll = 0.5
+                if timeout is not None:
+                    poll = min(poll, max(0.05, timeout - elapsed))
+                try:
+                    stdout, stderr = process.communicate(timeout=poll)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if controller is not None and controller.is_cancel_requested():
+                raise RunCancelled("Cancelled by operator")
+            return CommandResult(
+                command=command,
+                returncode=process.returncode if process.returncode is not None else -1,
+                stdout=stdout or "",
+                stderr=stderr or "",
+                duration_seconds=time.monotonic() - started,
+            )
+        finally:
+            if controller is not None:
+                controller.clear_process(process)
 
     @staticmethod
     def parse_evaluation(result: CommandResult) -> dict[str, float]:
@@ -81,3 +118,25 @@ class LocalRunner:
         ):
             raise RunnerError("metric names must be strings and values must be numbers")
         return {name: float(value) for name, value in metrics.items()}
+
+
+def _kill_popen(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(process.pid), 15)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            process.terminate()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(process.pid), 9)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                process.kill()
+            except OSError:
+                pass

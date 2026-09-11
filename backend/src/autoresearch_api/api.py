@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
@@ -9,14 +10,36 @@ from sqlalchemy.orm import Session, selectinload
 
 from .config import get_settings
 from .database import SessionLocal, get_session
+from .evaluation_record import build_evaluation_record
 from .executor import WorkflowExecutor
 from .git_service import GitService
-from .models import Run, Workflow
+from .models import (
+    ChatMessage,
+    ChatSummary,
+    HypothesisRecord,
+    Metric,
+    NodeRun,
+    Project,
+    Run,
+    TrialRecord,
+    Workflow,
+)
+from .projects import ProjectError, active_project, create_project, set_active_project
+from .run_control import ensure_controller, get_controller
 from .runner import LocalRunner
 from .schemas import (
+    DiffRead,
+    EvaluationEvidence,
+    EvaluationRead,
+    EvaluationSignals,
+    HandoffRead,
+    HypothesisRead,
     NodeTypeDefinition,
+    ProjectCreate,
+    ProjectRead,
     RunCreate,
     RunRead,
+    TrialRead,
     WorkflowDefinition,
     WorkflowSummary,
 )
@@ -29,29 +52,55 @@ NODE_TYPES = [
     NodeTypeDefinition(
         type="hypothesis",
         label="Hypothesis",
-        description="Create a new idea branch from the champion.",
-        config_schema={"title": "string", "description": "string"},
-    ),
-    NodeTypeDefinition(
-        type="trial",
-        label="Trial",
-        description="Create a trial branch and worktree.",
-        config_schema={"number": "integer"},
+        description="Propose the next idea from inbound context.",
+        config_schema={
+            "title": "string",
+            "description": "string",
+            "system_prompt": "string",
+            "model": "string",
+            "max_retries": "integer",
+            "max_hypotheses": "integer",
+            "history_window": "integer",
+            "use_planner": "boolean",
+        },
     ),
     NodeTypeDefinition(
         type="script",
         label="Script",
-        description="Run a trusted command and commit its changes.",
-        config_schema={"command": "string[]", "timeout_seconds": "integer"},
+        description="Optional allow-list of editable paths.",
+        config_schema={"allowed_paths": "string[]"},
     ),
     NodeTypeDefinition(
-        type="evaluation",
-        label="Evaluation",
-        description="Run a command that prints a metrics JSON object.",
+        type="execution",
+        label="Execution",
+        description="Run the candidate in a trial worktree.",
+        config_schema={
+            "command": "string[]",
+            "timeout_seconds": "integer",
+            "commit_message": "string",
+            "use_agent": "boolean",
+            "model": "string",
+        },
+    ),
+    NodeTypeDefinition(
+        type="eval_script",
+        label="Eval script",
+        description="Trusted evaluator that prints metrics JSON.",
         config_schema={
             "command": "string[]",
             "timeout_seconds": "integer",
             "protected_paths": "string[]",
+        },
+    ),
+    NodeTypeDefinition(
+        type="evaluation",
+        label="Evaluation agent",
+        description="Interpret metrics from eval script + execution.",
+        config_schema={
+            "system_prompt": "string",
+            "model": "string",
+            "use_agent": "boolean",
+            "explainability_schema": "object|null",
         },
     ),
     NodeTypeDefinition(
@@ -69,6 +118,12 @@ NODE_TYPES = [
         type="git_decision",
         label="Git decision",
         description="Record and tag the decision, then merge an accepted trial.",
+        config_schema={},
+    ),
+    NodeTypeDefinition(
+        type="database",
+        label="DB",
+        description="Browse project database tables.",
         config_schema={},
     ),
 ]
@@ -102,12 +157,14 @@ def save_workflow(
         raise HTTPException(status_code=422, detail="path id must match workflow id")
     workflow = session.get(Workflow, workflow_id)
     now = datetime.now(UTC)
+    project = active_project(session)
     if workflow is None:
         workflow = Workflow(
             id=definition.id,
             name=definition.name,
             description=definition.description,
             definition=definition.model_dump(mode="json"),
+            project_id=project.id if project else None,
             created_at=now,
             updated_at=now,
         )
@@ -117,18 +174,28 @@ def save_workflow(
         workflow.description = definition.description
         workflow.definition = definition.model_dump(mode="json")
         workflow.updated_at = now
+        if project:
+            workflow.project_id = project.id
     session.commit()
     return workflow.definition
 
 
+def _git_for_session(session: Session) -> GitService:
+    settings = get_settings()
+    project = active_project(session)
+    root = Path(project.local_path) if project else settings.project_root
+    return GitService(root, settings.runtime_root, settings.champion_branch)
+
+
 def _execute_run(run_id: str) -> None:
     settings = get_settings()
-    executor = WorkflowExecutor(
-        GitService(settings.project_root, settings.runtime_root, settings.champion_branch),
-        LocalRunner(settings.script_timeout_seconds),
-        settings.protected_path_list,
-    )
     with SessionLocal() as session:
+        git = _git_for_session(session)
+        executor = WorkflowExecutor(
+            git,
+            LocalRunner(settings.script_timeout_seconds),
+            settings.protected_path_list,
+        )
         executor.execute(session, run_id)
 
 
@@ -140,10 +207,15 @@ def create_run(
 ) -> Run:
     if session.get(Workflow, payload.workflow_id) is None:
         raise HTTPException(status_code=404, detail="workflow not found")
-    run = Run(workflow_id=payload.workflow_id)
+    project = active_project(session)
+    run = Run(
+        workflow_id=payload.workflow_id,
+        project_id=project.id if project else None,
+    )
     session.add(run)
     session.commit()
     session.refresh(run)
+    ensure_controller(run.id)
     background_tasks.add_task(_execute_run, run.id)
     return run
 
@@ -161,3 +233,416 @@ def get_run(run_id: str, session: SessionDep) -> Run:
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     return run
+
+
+def _load_run(session: Session, run_id: str) -> Run:
+    statement = select(Run).where(Run.id == run_id).options(selectinload(Run.node_runs))
+    run = session.scalar(statement)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return run
+
+
+@router.post("/runs/{run_id}/cancel", response_model=RunRead)
+def cancel_run(run_id: str, session: SessionDep) -> Run:
+    run = _load_run(session, run_id)
+    if run.status not in {"queued", "running", "paused"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"cannot cancel run in status {run.status}",
+        )
+    controller = ensure_controller(run.id)
+    controller.request_cancel()
+    if run.status in {"queued", "paused"}:
+        run.status = "cancelled"
+        run.error = "Cancelled by operator"
+        run.finished_at = datetime.now(UTC)
+        for node_run in run.node_runs:
+            if node_run.status == "running":
+                node_run.status = "cancelled"
+                node_run.stderr = "Cancelled by operator"
+                node_run.finished_at = datetime.now(UTC)
+        session.commit()
+        session.refresh(run)
+    return run
+
+
+@router.post("/runs/{run_id}/pause", response_model=RunRead)
+def pause_run(run_id: str, session: SessionDep) -> Run:
+    run = _load_run(session, run_id)
+    if run.status != "running":
+        raise HTTPException(
+            status_code=409,
+            detail=f"cannot pause run in status {run.status}",
+        )
+    controller = get_controller(run.id)
+    if controller is None:
+        raise HTTPException(status_code=409, detail="run worker is not active")
+    controller.request_pause()
+    return run
+
+
+@router.post("/runs/{run_id}/resume", response_model=RunRead)
+def resume_run(run_id: str, session: SessionDep) -> Run:
+    run = _load_run(session, run_id)
+    if run.status != "paused":
+        raise HTTPException(
+            status_code=409,
+            detail=f"cannot resume run in status {run.status}",
+        )
+    controller = get_controller(run.id)
+    if controller is None:
+        raise HTTPException(
+            status_code=409,
+            detail="run worker is not active; cannot resume after API restart",
+        )
+    controller.request_resume()
+    return run
+
+
+@router.get("/projects", response_model=list[ProjectRead])
+def list_projects(session: SessionDep) -> list[Project]:
+    return list(session.scalars(select(Project).order_by(Project.created_at.desc())))
+
+
+@router.get("/projects/active", response_model=ProjectRead | None)
+def get_active_project(session: SessionDep) -> Project | None:
+    return active_project(session)
+
+
+@router.post("/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
+def post_project(payload: ProjectCreate, session: SessionDep) -> Project:
+    settings = get_settings()
+    try:
+        return create_project(
+            session,
+            name=payload.name,
+            runtime_root=settings.runtime_root,
+            create_github=True,
+            github_owner=settings.github_owner,
+        )
+    except ProjectError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/activate", response_model=ProjectRead)
+def activate_project(project_id: str, session: SessionDep) -> Project:
+    try:
+        return set_active_project(session, project_id)
+    except ProjectError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _public_id(value: str) -> str:
+    return value.split(":", 1)[-1]
+
+
+def _hypothesis_read(row: HypothesisRecord) -> HypothesisRead:
+    return HypothesisRead(
+        id=_public_id(row.id),
+        title=row.title,
+        description=row.description,
+        branch=row.branch,
+        base_commit=row.base_commit,
+        status=row.status,
+        what_worked=row.what_worked,
+        what_did_not=row.what_did_not,
+        metrics=row.metrics,
+        created_at=row.created_at,
+    )
+
+
+def _trial_read(row: TrialRecord) -> TrialRead:
+    return TrialRead(
+        id=_public_id(row.id),
+        hypothesis_id=_public_id(row.hypothesis_id),
+        branch=row.branch,
+        candidate_commit=row.candidate_commit,
+        outcome=row.outcome,
+        error=row.error,
+        next_step=row.next_step,
+        what_changed=row.what_changed,
+        metrics=row.metrics,
+        created_at=row.created_at,
+    )
+
+
+def _evaluation_read(payload: dict[str, Any]) -> EvaluationRead:
+    signals = payload.get("signals") if isinstance(payload.get("signals"), dict) else {}
+    evidence = payload.get("evidence") if isinstance(payload.get("evidence"), dict) else {}
+    created_raw = payload.get("created_at")
+    if isinstance(created_raw, datetime):
+        created_at = created_raw
+    else:
+        created_at = datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+    return EvaluationRead(
+        schema_version="2",
+        evaluation_id=str(payload.get("evaluation_id") or ""),
+        trial_id=str(payload.get("trial_id") or ""),
+        hypothesis_id=str(payload.get("hypothesis_id") or ""),
+        run_id=str(payload.get("run_id") or ""),
+        status=payload.get("status")
+        if payload.get("status") in {"passed", "failed", "invalid"}
+        else "invalid",
+        metrics={
+            str(k): float(v)
+            for k, v in (payload.get("metrics") or {}).items()
+            if isinstance(v, (int, float))
+        },
+        champion_metrics={
+            str(k): float(v)
+            for k, v in (payload.get("champion_metrics") or {}).items()
+            if isinstance(v, (int, float))
+        },
+        deltas={
+            str(k): float(v)
+            for k, v in (payload.get("deltas") or {}).items()
+            if isinstance(v, (int, float))
+        },
+        primary_metric=str(payload.get("primary_metric") or "score"),
+        direction="maximize" if payload.get("direction") == "maximize" else "minimize",
+        summary=str(payload.get("summary") or ""),
+        signals=EvaluationSignals(
+            improved=[str(x) for x in signals.get("improved") or []],
+            regressed=[str(x) for x in signals.get("regressed") or []],
+            unchanged=[str(x) for x in signals.get("unchanged") or []],
+        ),
+        recommendation=payload.get("recommendation")
+        if payload.get("recommendation") in {"accept", "reject", "retry"}
+        else "retry",
+        rationale=str(payload.get("rationale") or ""),
+        risks=str(payload.get("risks") or ""),
+        evidence=EvaluationEvidence(
+            candidate_commit=str(evidence.get("candidate_commit") or ""),
+            evaluator_commit=str(evidence.get("evaluator_commit") or ""),
+            duration_seconds=(
+                float(evidence["duration_seconds"])
+                if isinstance(evidence.get("duration_seconds"), (int, float))
+                else None
+            ),
+            stdout_excerpt=(
+                str(evidence["stdout_excerpt"])
+                if evidence.get("stdout_excerpt") is not None
+                else None
+            ),
+        ),
+        model=str(payload.get("model") or ""),
+        system_prompt_hash=str(payload.get("system_prompt_hash") or ""),
+        agent_trace_id=str(payload.get("agent_trace_id") or ""),
+        prompt_version=str(payload.get("prompt_version") or ""),
+        observability_backend=str(payload.get("observability_backend") or ""),
+        explainability=(
+            dict(payload["explainability"])
+            if isinstance(payload.get("explainability"), dict)
+            else {}
+        ),
+        explainability_schema_hash=str(payload.get("explainability_schema_hash") or ""),
+        created_at=created_at,
+    )
+
+
+def _list_project_evaluations(session: Session, project_id: str) -> list[EvaluationRead]:
+    rows = list(
+        session.scalars(
+            select(NodeRun)
+            .join(Run)
+            .where(Run.project_id == project_id)
+            .where(NodeRun.node_type.in_(("evaluation", "eval_script")))
+            .order_by(NodeRun.started_at.desc())
+        )
+    )
+    by_key: dict[str, EvaluationRead] = {}
+    for row in rows:
+        output = row.output if isinstance(row.output, dict) else {}
+        parsed: EvaluationRead | None = None
+        if row.node_type == "evaluation" and output.get("schema_version") == "2":
+            record = dict(output)
+            record.setdefault("run_id", row.run_id)
+            parsed = _evaluation_read(record)
+        elif row.node_type == "eval_script" and isinstance(output.get("metrics"), dict):
+            run = session.get(Run, row.run_id)
+            trial_id = str((run.trial_id if run else None) or output.get("trial_id") or "")
+            if not trial_id:
+                continue
+            built = build_evaluation_record(
+                trial_id=trial_id,
+                run_id=row.run_id,
+                metrics=output["metrics"],
+                champion_metrics={},
+                primary_metric=str(next(iter(output["metrics"]), "score")),
+                direction="minimize",
+                candidate_commit=str(output.get("candidate_commit") or ""),
+                evaluator_commit=str(output.get("evaluator_commit") or ""),
+                status="passed" if row.status == "succeeded" else "failed",
+                created_at=row.started_at.isoformat(),
+            )
+            parsed = _evaluation_read(built)
+        if parsed is None:
+            continue
+        key = f"{parsed.trial_id}:{parsed.evidence.candidate_commit}"
+        # Newest first; evaluation agent rows appear before eval_script for the same trial.
+        if key not in by_key:
+            by_key[key] = parsed
+    return list(by_key.values())
+
+
+@router.get("/projects/{project_id}/handoff", response_model=HandoffRead)
+def project_handoff(project_id: str, session: SessionDep) -> HandoffRead:
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    summary = session.scalar(select(ChatSummary).where(ChatSummary.project_id == project_id))
+    hypotheses = list(
+        session.scalars(
+            select(HypothesisRecord)
+            .where(HypothesisRecord.project_id == project_id)
+            .order_by(HypothesisRecord.created_at.asc())
+        )
+    )
+    trials = list(
+        session.scalars(
+            select(TrialRecord)
+            .where(TrialRecord.project_id == project_id)
+            .order_by(TrialRecord.created_at.asc())
+        )
+    )
+    champion_metrics: dict[str, float] = {}
+    for hypo in reversed(hypotheses):
+        if hypo.status == "accepted" and isinstance(hypo.metrics, dict) and hypo.metrics:
+            champion_metrics = {
+                key: float(value)
+                for key, value in hypo.metrics.items()
+                if isinstance(value, (int, float))
+            }
+            break
+    return HandoffRead(
+        project=ProjectRead.model_validate(project),
+        summary=summary.summary if summary else "",
+        champion_metrics=champion_metrics,
+        hypotheses=[_hypothesis_read(item) for item in hypotheses],
+        trials=[_trial_read(item) for item in trials],
+    )
+
+
+@router.get("/projects/{project_id}/hypotheses", response_model=list[HypothesisRead])
+def list_hypotheses(project_id: str, session: SessionDep) -> list[HypothesisRead]:
+    rows = list(
+        session.scalars(
+            select(HypothesisRecord)
+            .where(HypothesisRecord.project_id == project_id)
+            .order_by(HypothesisRecord.created_at.asc())
+        )
+    )
+    return [_hypothesis_read(row) for row in rows]
+
+
+@router.get("/projects/{project_id}/trials", response_model=list[TrialRead])
+def list_trials(project_id: str, session: SessionDep) -> list[TrialRead]:
+    rows = list(
+        session.scalars(
+            select(TrialRecord)
+            .where(TrialRecord.project_id == project_id)
+            .order_by(TrialRecord.created_at.asc())
+        )
+    )
+    return [_trial_read(row) for row in rows]
+
+
+@router.get("/projects/{project_id}/evaluations", response_model=list[EvaluationRead])
+def list_evaluations(project_id: str, session: SessionDep) -> list[EvaluationRead]:
+    if session.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    return _list_project_evaluations(session, project_id)
+
+
+@router.get("/projects/{project_id}/tables/{table_name}")
+def project_table(project_id: str, table_name: str, session: SessionDep) -> dict[str, Any]:
+    if session.get(Project, project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    loaders = {
+        "hypotheses": lambda: [
+            _hypothesis_read(row).model_dump(mode="json")
+            for row in session.scalars(
+                select(HypothesisRecord).where(HypothesisRecord.project_id == project_id)
+            )
+        ],
+        "trials": lambda: [
+            _trial_read(row).model_dump(mode="json")
+            for row in session.scalars(
+                select(TrialRecord).where(TrialRecord.project_id == project_id)
+            )
+        ],
+        "evaluations": lambda: [
+            item.model_dump(mode="json") for item in _list_project_evaluations(session, project_id)
+        ],
+        "metrics": lambda: [
+            {"id": row.id, "name": row.name, "value": row.value, "run_id": row.run_id}
+            for row in session.scalars(select(Metric).where(Metric.project_id == project_id))
+        ],
+        "runs": lambda: [
+            {
+                "id": row.id,
+                "status": row.status,
+                "hypothesis_id": row.hypothesis_id,
+                "trial_id": row.trial_id,
+                "error": row.error,
+            }
+            for row in session.scalars(select(Run).where(Run.project_id == project_id))
+        ],
+        "node_runs": lambda: [
+            {
+                "id": row.id,
+                "run_id": row.run_id,
+                "node_id": row.node_id,
+                "node_type": row.node_type,
+                "status": row.status,
+            }
+            for row in session.scalars(
+                select(NodeRun).join(Run).where(Run.project_id == project_id)
+            )
+        ],
+        "chat_summaries": lambda: [
+            {"id": row.id, "summary": row.summary, "updated_at": row.updated_at.isoformat()}
+            for row in session.scalars(
+                select(ChatSummary).where(ChatSummary.project_id == project_id)
+            )
+        ],
+        "chat_messages": lambda: [
+            {
+                "id": row.id,
+                "role": row.role,
+                "content": row.content,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in session.scalars(
+                select(ChatMessage).where(ChatMessage.project_id == project_id)
+            )
+        ],
+    }
+    if table_name not in loaders:
+        raise HTTPException(status_code=404, detail="unknown table")
+    return {"table": table_name, "rows": loaders[table_name]()}
+
+
+@router.get(
+    "/projects/{project_id}/trials/{trial_id:path}/diff",
+    response_model=DiffRead,
+)
+def trial_diff(project_id: str, trial_id: str, session: SessionDep) -> DiffRead:
+    trial = session.get(TrialRecord, f"{project_id}:{trial_id}")
+    hypo = session.get(HypothesisRecord, trial.hypothesis_id) if trial else None
+    if trial is None or hypo is None or trial.project_id != project_id:
+        raise HTTPException(status_code=404, detail="trial not found")
+    if not trial.candidate_commit:
+        raise HTTPException(status_code=404, detail="trial has no candidate commit")
+    git = _git_for_session(session)
+    try:
+        diff = git.diff(hypo.base_commit, trial.candidate_commit)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return DiffRead(
+        trial_id=trial_id,
+        base_commit=hypo.base_commit,
+        candidate_commit=trial.candidate_commit,
+        diff=diff or "No file changes.",
+    )
