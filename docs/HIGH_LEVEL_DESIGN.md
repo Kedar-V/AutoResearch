@@ -1,358 +1,328 @@
 # AutoResearch High-Level Design
 
-- **Status:** Draft
-- **Version:** 0.2
-- **Last updated:** 2026-09-03
+- **Status:** Current architecture (shipped MVP)
+- **Version:** 0.4
+- **Last updated:** 2026-09-11
+
+This document describes the **running system**. Deferred / target platform ideas
+are listed in §14 so they are not confused with what exists today.
 
 ## 1. Purpose
 
-AutoResearch is a visual, Git-native system for autonomous experimentation. Users arrange executable nodes on a whiteboard and connect typed ports to define how hypotheses, code changes, artifacts, and metrics move through a research loop.
+AutoResearch is a local, Git-native control plane for executable research
+workflows. Operators edit a **locked research recipe** on a React Flow canvas;
+the FastAPI backend compiles that recipe, runs agents and trusted scripts in
+Git worktrees, gates metrics, and promotes accepted trials onto the champion
+branch (`master` by default).
 
-The system preserves a complete audit trail while continuously accumulating only verified improvements on the champion branch.
+Git is authoritative for source, branches, notes, tags, and promotion history.
+PostgreSQL (preferred) or SQLite holds the queryable control-plane projection
+(projects, workflows, runs, hypotheses, trials, chat handoff). Agent vendors
+(observability, memory) are optional soft-fail ports and are **never** the
+research ledger.
 
-## 2. Goals
+## 2. Goals (MVP)
 
-- Provide a drag-and-drop whiteboard for composing research workflows.
-- Execute Python, shell, evaluator, agent, MCP, control-flow, and Git nodes.
-- Represent each new idea as a hypothesis branch from the latest `main`.
-- Represent each attempt or repair as a configurable trial branch derived from its hypothesis lineage.
-- Evaluate candidates with repository-controlled scripts and structured metrics.
-- Merge a candidate only when it improves on the current champion under a configured policy.
-- Record research lineage, evidence, and decisions in Git.
-- Use PostgreSQL for responsive queries without making it the canonical ledger.
-- Recover safely from process crashes and support parallel trials.
-- Keep agents, model providers, evaluators, and execution backends replaceable.
+- Locked visual recipe for the closed research loop (compile-validated).
+- Hypothesis → execution → eval script → evaluation agent → metric gate → Git decision.
+- Inner self-heal retries under a hypothesis; outer feedback from decision → next hypothesis.
+- Protected evaluators; promote only when the metric gate accepts.
+- Durable Git lineage (hypothesis/trial branches, notes, decision tags).
+- Project registry + handoff UI backed by SQL.
+- Replaceable LLM agents (Cursor SDK / OpenAI), observability, and memory adapters.
 
-## 3. Non-goals for the first milestone
+## 3. Non-goals (MVP)
 
-- A general-purpose CI/CD platform.
-- Distributed GPU scheduling across multiple clusters.
-- A public workflow marketplace.
+- Temporal / distributed workers / multi-host GPU scheduling.
+- Hermes / AutoResearchClaw as the agent runtime.
+- MCP tool nodes, Podman isolation, untrusted script execution.
 - Collaborative real-time canvas editing.
-- Storing large datasets and model checkpoints in normal Git objects.
-- Treating an agent's private memory files as authoritative research state.
+- Content-addressed artifact object store.
+- Treating vendor memory (Honcho / Hindsight / …) as authoritative research state.
 
-## 4. System context
-
-The architecture diagram is available as a standalone artifact at [architecture.html](architecture.html).
+## 4. System context (shipped)
 
 ```mermaid
 flowchart LR
-    User[Researcher] --> UI[React Flow canvas]
-    UI --> API[FastAPI control plane]
-    API --> Temporal[Temporal workflows]
-    Temporal --> Worker[Execution worker]
-    Worker --> Hermes[Hermes / AutoResearchClaw]
-    Worker --> MCP[MCP tools]
-    Worker --> Runtime[Local script runner]
-    Worker --> Git[(Git repository + worktrees)]
-    Git --> Projector[Git projector]
-    Projector --> SQL[(PostgreSQL)]
-    SQL --> API
-    Worker --> Artifacts[(Content-addressed artifacts)]
-    Artifacts --> Git
+  User[Researcher] --> UI[React Flow canvas]
+  UI --> API[FastAPI control plane]
+  API --> Exec[WorkflowExecutor]
+  Exec --> Agents[Planner / code / eval agents]
+  Exec --> Runner[LocalRunner trusted scripts]
+  Exec --> Git[(Git repo + worktrees)]
+  API --> SQL[(Postgres or SQLite)]
+  Agents --> Obs[AgentObservability port]
+  Agents --> Mem[AgentMemory port]
+  Obs --> Langfuse[Langfuse optional]
+  Mem --> Honcho[Honcho optional]
+  Mem --> Hindsight[Hindsight optional]
 ```
+
+Interactive diagram: [architecture.html](architecture.html).
 
 ## 5. Component design
 
 ### 5.1 Web application
 
-**Technology:** React, TypeScript, Vite, React Flow, Tailwind CSS, shadcn/ui, Monaco Editor, Apache ECharts.
+**Technology:** React, TypeScript, Vite, React Flow.
 
 Responsibilities:
 
-- Render an infinite whiteboard with movable nodes and directed edges.
-- Provide a searchable node palette and node configuration inspector.
-- Validate port compatibility before creating an edge.
-- Display live execution status, logs, artifacts, metrics, diffs, and decisions.
-- Compare trials against their baseline and current champion.
-- Submit immutable workflow versions for execution.
-
-Canvas coordinates are UI metadata. Executable workflow definitions are versioned as JSON in `.research/workflows/`.
+- **Locked research recipe** canvas (not a freeform node palette): exactly one of
+  each required spine type, optional `database` viewer, typed ports per role.
+- Side panel documents the locked grammar; required nodes cannot be deleted;
+  illegal connections/reconnects are blocked with notices.
+- Save and Run are gated on `compileRecipe` (mirrors backend `compile_recipe`).
+- **Reset recipe layout** restores the starter graph; toolbar **DB** opens the
+  project explorer.
+- Live run status, pause/cancel/resume, staircase metrics, slide-overs
+  (agent / evaluation / DB).
+- Project picker, New Project, **Restart** (wipe experiment ledger + start fresh).
+- Workflow JSON saved via API (SQL `workflows.definition`).
 
 ### 5.2 Control plane
 
-**Technology:** FastAPI, Pydantic, SQLAlchemy, Alembic.
+**Technology:** FastAPI, Pydantic, SQLAlchemy. Schema bootstrap via
+`Base.metadata.create_all` (no Alembic in MVP).
 
 Responsibilities:
 
-- Validate workflow definitions and node configurations.
-- Resolve repository state and enforce naming conventions.
-- Start, cancel, and inspect workflow executions.
-- Serve projected history and metrics from PostgreSQL.
-- Stream logs and state changes to the browser.
-- Enforce authorization and policy boundaries.
+- CRUD workflows; **`compile_recipe` validation** on save, create-run, and
+  project restart (HTTP **422** if the graph is not a legal research recipe).
+- Start runs as in-process `BackgroundTasks`.
+- Cancel / pause / resume via `run_control`.
+- Projects: create (optional GitHub via `gh`), activate, handoff, table explorer.
+- `POST /api/projects/{id}/restart` — skill-aligned wipe + auto-start.
+- Serve hypotheses, trials, evaluations, trial diffs.
 
-The control plane invokes Git through a small audited adapter around the native Git CLI. It never infers canonical decisions from SQL alone.
+Runs execute inside the API process through `WorkflowExecutor` + `LocalRunner`.
+There is no separate Temporal worker or Git→SQL projector process.
 
-### 5.3 Durable orchestrator
+### 5.3 Execution model
 
-**Technology:** Self-hosted Temporal and the Temporal Python SDK.
+**Technology:** Git worktrees, trusted local subprocesses, wall-clock timeouts.
 
-Responsibilities:
+- Executor always runs a **`CompiledLoop`** from `compile_recipe` (no free
+  topological fallback). Outer loop uses `max_hypotheses`; inner retries use
+  `max_retries`; post-trial order is fixed:
+  `eval_script → evaluation → metric_gate → git_decision`.
+- Each trial gets `trial/H####/T###` branched from its hypothesis branch
+  (sibling-style; configurable ancestry policies are not implemented).
+- Scripts run only in the trial worktree with captured stdout/stderr.
+- Allow-lists come from `execution.config.allowed_paths` (legacy `script`
+  annotation is fallback only).
+- Protected paths (e.g. `eval.py`) cannot be modified by candidates.
+- Champion promotion: clean worktree on champion branch, base must still match
+  hypothesis base commit, then `merge --no-ff`. Dirty champion fails with
+  porcelain paths; accepted note/tag is written only after a successful merge.
 
-- Execute the compiled DAG durably.
-- Schedule ready nodes after their dependencies complete.
-- Support retries, timeouts, cancellation, conditions, and bounded loops.
-- Resume safely following worker or host failures.
-- Coordinate parallel trials and the serialized merge queue.
+### 5.4 Research agents
 
-Temporal history is operational state. Terminal research results must be written to Git before an execution is considered complete.
+Replaceable Cursor SDK / OpenAI agents (not Hermes):
 
-### 5.4 Execution workers
+| Role | Module | Toggle |
+|------|--------|--------|
+| Hypothesis planner | `hypothesis_planner.py` | `use_planner` on hypothesis node |
+| Code / execution edits | `code_agent.py` | `use_agent` on execution node |
+| Evaluation judgment | `evaluation_agent.py` | `use_agent` on evaluation node |
 
-**MVP technology:** Python worker, Git worktrees, and per-project Python virtual environments.
+Without planners/agents, briefs and template judgments still drive a deterministic
+loop. Agents consume SQL history + briefs; optional memory injects soft lessons.
 
-Responsibilities:
+### 5.5 Git ledger
 
-- Allocate an isolated worktree for each active hypothesis or trial.
-- Materialize declared inputs and environment configuration.
-- Execute trusted scripts as local subprocesses inside their assigned worktrees and virtual environments.
-- Capture stdout, stderr, exit code, duration, resource usage, and artifacts.
-- Validate evaluator output against its declared JSON Schema.
-- Commit code changes and append structured Git records.
-
-The MVP runner is intentionally simple and is suitable only for trusted scripts. It enforces working-directory boundaries, explicit environment variables, output capture, and wall-clock timeouts, but it is not a security sandbox.
-
-Rootless Podman becomes the execution boundary in the hardening milestone, before the platform permits untrusted scripts or unattended autonomous execution. At that point network access, mounts, CPU, memory, process count, disk, GPU, and wall-clock limits become explicit node policy.
-
-### 5.5 Research agent
-
-**Initial implementation:** Hermes Agent with AutoResearchClaw research behavior.
-
-Responsibilities:
-
-- Propose a hypothesis from the current champion, past evidence, and user objective.
-- Produce a structured experiment plan.
-- Modify code only inside the assigned worktree.
-- Diagnose failed trials and propose repair trials.
-- Return schema-constrained outputs rather than implicit Markdown state.
-
-Hermes is a replaceable reasoning component. The platform supplies context derived from Git and PostgreSQL; Hermes memory is not the research ledger.
-
-Optional agent observability (default off) uses a vendor-agnostic `AgentObservability` port. Users select `noop`, `langfuse-cloud`, or `langfuse-selfhost` (local OSS via `ops/langfuse`). The Langfuse adapter stores full agent prompts/generations and heuristic scores; Git evaluation notes carry opaque `agent_trace_id` values so the vendor remains swappable. Scientific explainability (metrics, gates, decisions) stays in Git.
-
-Optional agent memory (default off) uses a parallel `AgentMemory` port (`noop` | `honcho` | `hindsight` | `composite`). Honcho and Hindsight are independent adapters behind the same Protocol; composite fans out retain and merges recall. Memory holds preferences and soft lessons only — never champion code, gates, or trial branches.
-
-### 5.6 Git ledger
-
-Git is authoritative for source code, workflow definitions, ancestry, agent patches, evaluation policy, evaluator version, fingerprints, metrics, decisions, champion merges, and artifact manifests.
-
-Structured records are stored as versioned JSON using dedicated Git notes refs:
+Authoritative for code and research evidence. Notes refs in use:
 
 ```text
 refs/notes/research/hypotheses
 refs/notes/research/evaluations
 refs/notes/research/decisions
-refs/notes/research/artifacts
+refs/notes/research/champions
 ```
 
-Terminal states also receive durable tags:
+Decision tags (examples):
 
 ```text
-accepted/H0001/T003
-rejected/H0001/T001
-failed/H0001/T002
+accepted/H0001-T001
+rejected/H0001-T001
+failed/H0001-T001
 ```
 
-Notes and tags are pushed with code refs. Record schemas live under `.research/schemas/`.
+Rejected/failed trials keep their branches and records. Champion branch default
+is `master` (`AUTORESEARCH_CHAMPION_BRANCH`).
 
-### 5.7 PostgreSQL projection
+### 5.6 SQL control plane (preferred Postgres)
 
-PostgreSQL provides indexed read models for the UI and scheduler. Initial tables are `repositories`, `workflow_versions`, `workflow_nodes`, `workflow_edges`, `hypotheses`, `trials`, `node_runs`, `metrics`, `artifacts`, `decisions`, `git_refs`, and `merge_queue`.
+Tables (ORM, default `public` schema, scoped by `project_id` where relevant):
 
-A projector reads branches, commits, notes, and tags and performs idempotent upserts. The database can be deleted and rebuilt from the Git ledger; ephemeral logs and scheduler leases may remain SQL-only.
+`projects`, `workflows`, `runs`, `node_runs`, `metrics`, `hypotheses`, `trials`,
+`chat_messages`, `chat_summaries`.
 
-### 5.8 Artifact storage
+On project create, Postgres also `CREATE SCHEMA IF NOT EXISTS "proj_<slug>"`
+(reserved namespace; rows remain in `public` today).
 
-Large artifacts are stored outside normal Git objects in a content-addressed local store for the first milestone. Git stores a manifest containing the SHA-256 digest, media type, size, producer node and trial, producer commit, storage URI, and creation time.
+SQLite is for tests / zero-setup smoke when `AUTORESEARCH_DATABASE_URL` is unset.
 
-Forgejo Git LFS or a compatible open-source object store can replace local storage later without changing this contract.
+### 5.7 Agent observability (optional)
 
-### 5.9 MCP integration
+Port: `backend/src/autoresearch_api/observability/`.
 
-MCP is an interoperability boundary, not the orchestration engine.
+| Backend | Meaning |
+|---------|---------|
+| `noop` | Default off |
+| `langfuse-cloud` | Langfuse Cloud |
+| `langfuse-selfhost` | Local OSS (`make langfuse-selfhost-up`, UI `:3000`, DB host **5434**) |
+| `langfuse` | Generic host + keys |
 
-- An MCP Tool node invokes a selected server tool with schema-validated inputs.
-- A completed workflow may optionally be exposed as an MCP tool.
-- MCP calls use explicit allowlists, timeouts, and redacted logging.
-- Credentials are injected by the runtime and never committed to Git or node definitions.
+Agents never import `langfuse`. Evaluation notes store vendor-neutral
+`agent_trace_id` / `prompt_version` / `observability_backend`. Real token usage
+is passed through when providers report it; no invented costs.
 
-## 6. Workflow and type model
+### 5.8 Agent memory (optional)
 
-A workflow is a directed graph of immutable node definitions and edges. Each port declares a JSON Schema. An edge is valid only when its output contract is assignable to the destination input contract.
+Port: `backend/src/autoresearch_api/memory/`.
 
-| Family | Nodes |
-|---|---|
-| Research | Agent, Create Hypothesis, Create Trial |
-| Execution | Python Script, Shell Script, Container Command |
-| Evaluation | Evaluation Script, Metric Gate, Compare Champion |
-| Control flow | Condition, Fan-out, Join, Loop, Retry, Human Approval |
-| Integration | MCP Tool, Artifact Input/Output |
-| Git | Commit, Tag Decision, Rebase, Merge Champion |
+| Backend | Meaning |
+|---------|---------|
+| `noop` | Default off |
+| `honcho` | Preferences / session memory (`honcho-ai` extra) |
+| `hindsight` | Retain/recall bank (install vendor client separately) |
+| `composite` | Fan-out retain; merge/dedupe recall (`MEMORY_PROVIDERS=honcho,hindsight`) |
 
-Loops declare a maximum iteration count, maximum cost or runtime, and a terminal condition.
+Briefs inject an advisory Memory section on recall. Outcomes and chat handoff
+call retain. Memory is never SoR for champion, gates, or trial branches.
 
-## 7. Git branching and trial policies
+## 6. Workflow model (MVP)
+
+The canvas is a **constrained research recipe**, not a general-purpose DAG.
+Frontend [`frontend/src/recipe.ts`](../frontend/src/recipe.ts) and backend
+[`backend/src/autoresearch_api/workflow.py`](../backend/src/autoresearch_api/workflow.py)
+share the same grammar and compile to a `CompiledLoop`.
 
 ```text
-main
-└── hypothesis/H0001-description
-    ├── trial/H0001/T001
-    ├── trial/H0001/T002
-    └── trial/H0001/T003
+Hypothesis → Execution ⇄ (self-heal)
+           → Eval script → Evaluation agent
+           → Metric gate → Git decision → Hypothesis
 ```
 
-Every hypothesis starts from the latest accepted `main`. Trial ancestry is configurable:
+### Required types (exactly one each)
 
-- `sibling`: every trial starts from the hypothesis root.
-- `chained`: the next trial starts from the previous trial, including its fixes.
-- `last_runnable`: the next trial starts from the latest trial that executed successfully.
+`hypothesis`, `execution`, `eval_script`, `evaluation`, `metric_gate`, `git_decision`
 
-The default is `sibling` because it isolates causal effects. Repair-oriented workflows may choose `chained` or `last_runnable`.
+### Legal directed edges
 
-### Promotion protocol
+| Source | Target | Role |
+|--------|--------|------|
+| hypothesis | execution | start trial work |
+| execution | eval_script | metrics path (required in practice) |
+| execution | evaluation | optional direct edge |
+| eval_script | evaluation | feed metrics into judgment |
+| evaluation | metric_gate | gate input |
+| metric_gate | git_decision | promote/reject |
+| execution | hypothesis | self-heal retry |
+| git_decision | hypothesis | outer feedback |
 
-1. Lock the candidate and evaluator commits.
-2. Record dataset checksum and environment fingerprint.
-3. Run the evaluator and validate its structured metrics.
-4. Compare the candidate with its declared baseline using the promotion policy.
-5. If rejected, record the evidence and create a rejected tag.
-6. If provisionally accepted, enqueue the candidate for serialized promotion.
-7. Rebase onto the latest `main` if `main` advanced.
-8. Rerun evaluation against the new champion.
-9. Merge with `--no-ff` only if the candidate still passes.
-10. Record the final decision and update the PostgreSQL projection.
+Required edges include hyp→exec, eval_script→evaluation, evaluation→gate,
+gate→decision, and at least one execution→eval path. Post-trial spine must be
+`eval_script → evaluation → metric_gate → git_decision`.
 
-Re-evaluation after rebasing prevents promotion based on an obsolete baseline.
+### Other node roles
+
+| Node | Role |
+|------|------|
+| `database` | UI viewer only (no ports / not in compile spine) |
+| `trial` | Viewer type (not a palette recipe role) |
+| `script` | Legacy allow-list annotation only; prefer `execution.allowed_paths` |
+
+Contracts live under `contracts/`. Workflow JSON is stored in SQL
+`workflows.definition`. Invalid recipes are rejected with HTTP 422 on save,
+run, and restart.
+
+## 7. Branching and promotion (MVP)
+
+```text
+master   (champion)
+└── hypothesis/H0001-…
+    └── trial/H0001/T001
+        └── trial/H0001/T002   (retry under same hypothesis)
+```
+
+Promotion (accepted gate):
+
+1. Require champion worktree clean and HEAD == hypothesis base.
+2. `git merge --no-ff trial/…`.
+3. Record decision note + `accepted/…` tag + champions note.
+4. Next hypothesis bases on the new champion tip.
+
+If the champion advanced underfoot, merge fails with “champion advanced”
+(no automatic rebase/re-eval queue yet).
 
 ## 8. Evaluation integrity
 
-- Evaluation scripts and policies live in protected repository paths.
-- Candidate permissions prevent modifications to protected evaluation assets.
-- Results record evaluator commit, candidate commit, parameters, seeds, dataset digest, environment fingerprint, and raw metric output digest.
-- Policies support maximize, minimize, thresholds, tolerances, and multi-metric constraints.
-- Non-deterministic evaluations may require repeated runs and statistical confidence.
-- A failed or malformed evaluator never counts as an improvement.
+- Eval scripts and protected paths are not writable by candidates.
+- Eval stdout must be a single JSON object with numeric `metrics`.
+- Gate: maximize or minimize with `min_delta` against live champion baseline
+  when available.
+- Malformed eval / gate failure never merges.
 
 ## 9. Failure handling
 
 | Failure | Behavior |
-|---|---|
-| Script exits non-zero | Record failure; apply configured retry or repair policy |
-| Worker crashes | Temporal reschedules the activity subject to policy |
-| Agent returns invalid data | Retry with schema validation feedback |
-| Evaluator output is malformed | Mark trial invalid; never promote |
-| `main` advances before merge | Rebase and rerun evaluation |
-| Merge conflict | Block candidate; invoke repair or human approval policy |
-| PostgreSQL is lost | Rebuild it from Git refs, notes, tags, and commits |
-| Artifact is corrupt | Detect digest mismatch and mark evidence incomplete |
+|---------|----------|
+| Script non-zero | Trial failed; retry up to `max_retries` |
+| Agent invalid output | Soft-fail / retry per agent; run can fail |
+| Dirty champion on accept | Decision fails; porcelain paths in error; no accepted ledger without merge |
+| API restart mid-run | Worker dies; mark run failed / use Restart |
+| Project Restart | Wipe experiment refs + SQL ledger; keep champion tip; start new run |
 
-## 10. Security boundaries
+## 10. Security boundaries (MVP)
 
-For the trusted-script MVP:
+- Trusted local scripts only; not a security sandbox.
+- Per-trial worktree + timeout + cancel kills process group.
+- Secrets via process env (`CURSOR_API_KEY`, `OPENAI_API_KEY`, Langfuse/Honcho keys);
+  never commit `backend/.env`.
+- Protect champion branch and evaluator paths.
 
-- Run each trial in its own Git worktree and project virtual environment.
-- Pass an explicit environment allowlist rather than inheriting the full host environment.
-- Apply wall-clock timeouts and terminate child process groups on cancellation.
-- Do not execute third-party or otherwise untrusted scripts.
-- Keep model, Git, and MCP credentials out of script environments unless explicitly required.
-- Redact secrets from logs before persistence.
-- Protect `main`, evaluator paths, and research note refs.
-
-Future Podman hardening adds:
-
-- Rootless containers for every trial.
-- No network access and read-only base filesystems by default.
-- Mounts limited to the assigned worktree and declared artifact paths.
-- CPU, memory, process, disk, GPU, and wall-clock limits.
-- Disposable environments and image-based dependency reproducibility.
-
-## 11. Deployment model
-
-The MVP is a single-machine development deployment with ordinary local processes:
+## 11. Deployment (local MVP)
 
 ```text
-web
-api
-worker
-projector
-postgres
-hermes
-artifact-volume
+frontend (:5173)     Vite React canvas
+backend  (:8000)     FastAPI + in-process executor
+postgres (:5432)     optional SoR  — make postgres-up
+langfuse (:3000)     optional OSS  — make langfuse-selfhost-up
+                     (Langfuse Postgres on host :5434)
 ```
 
-The MVP worker executes one workflow sequentially. Services may be launched directly during development. Temporal is added in Milestone 4, and Podman Compose becomes a packaging option only after container isolation is introduced.
+## 12. Observability and memory summary
 
-Later, workers can move to separate GPU hosts while retaining the same API and Git contracts.
+- **Scientific metrics / staircases:** AutoResearch UI + Git champions notes.
+- **LLM traces / usage:** Langfuse via `AgentObservability` (optional).
+- **Prefs / soft lessons:** Honcho / Hindsight via `AgentMemory` (optional).
 
-## 12. Observability
-
-- Structured logs with workflow, hypothesis, trial, node, and commit identifiers.
-- OpenTelemetry traces across API, workflow, worker, agent, MCP, and evaluator calls.
-- Prometheus-compatible service metrics.
-- User timelines reconstructed from Git evidence plus live operational state.
-- Metric charts backed by PostgreSQL and linked to canonical Git records.
-
-## 13. Delivery plan
-
-### Milestone 1: Git lifecycle vertical slice
-
-- Establish `main` as the protected champion branch.
-- Define versioned schemas for workflows, hypotheses, evaluations, and decisions.
-- Implement branch, worktree, notes, tags, and promotion operations.
-- Execute trusted local scripts and evaluators sequentially in worktrees and virtual environments.
-- Project the resulting Git state into PostgreSQL.
-
-### Milestone 2: Executable canvas
-
-- Build the React Flow editor and node inspector.
-- Add typed ports and connection validation.
-- Add Script, Eval, Metric Gate, Git Decision, and Merge nodes.
-- Display live runs, Git diffs, and metric comparisons.
-
-### Milestone 3: Closed-loop agent
-
-- Integrate Hermes and AutoResearchClaw through structured contracts.
-- Add hypothesis generation and repair-trial policies.
-- Add MCP Tool nodes, budgets, and terminal conditions.
-
-### Milestone 4: Durable parallel execution
-
-- Adopt Temporal for recovery, retries, cancellation, and parallel trials.
-- Add serialized rebase/re-evaluate/merge promotion.
-
-### Milestone 5: Execution hardening
-
-- Add rootless Podman isolation and resource policies.
-- Disable network access by default and allow only declared mounts.
-- Introduce versioned execution images and reproducible dependency environments.
-- Permit untrusted or unattended autonomous script execution only after isolation tests pass.
-
-### Milestone 6: Collaboration and scale
-
-- Deploy Forgejo and protect relevant refs and paths.
-- Add authentication, authorization, remote workers, GPU scheduling, and shared artifact storage.
-
-## 14. Key decisions
+## 13. Key decisions
 
 | Decision | Rationale |
-|---|---|
-| Build the editor with React Flow | It directly supports whiteboard interaction and custom executable nodes. |
-| Keep Git canonical | Branches and commits make code lineage reproducible and reviewable. |
-| Make PostgreSQL rebuildable | The UI needs fast queries without creating a second source of truth. |
-| Use native Git worktrees | Trials can run concurrently without duplicating repositories. |
-| Keep Hermes outside the control plane | Agents remain replaceable and cannot redefine platform state. |
-| Re-evaluate after rebase | Promotion is always measured against the latest champion. |
-| Keep large artifacts outside normal Git | Avoid repository bloat while retaining cryptographic provenance. |
-| Delay Temporal until the vertical slice works | Validate Git semantics before adding distributed complexity. |
-| Delay Podman until execution hardening | Keep the MVP simple while making the trust boundary explicit. |
+|----------|-----------|
+| Constrained recipe grammar + compile-time validation | Keep the research loop unambiguous across UI, API, and executor |
+| Git canonical for code lineage | Reviewable branches, notes, tags |
+| SQL for control plane + handoff | Fast UI queries; not a second champion |
+| In-process executor first | Prove the loop before Temporal |
+| Cursor/OpenAI agents behind modules | Swap runtime later (Hermes deferred) |
+| Observability + memory as ports | Soft-fail vendors; keep SoR clear |
+| Champion branch `master` | Matches benches and git_service default |
+| Restart keeps champion tip | Wipe experiments without losing accepted code |
 
-## 15. Open questions
+## 14. Deferred / target platform
 
-- Which metric aggregation and statistical significance policies are required first?
-- Should rejected trial branches be retained indefinitely, archived, or deleted after tagging?
-- Which artifact backend should follow the local content-addressed store?
-- Which model providers and local inference runtimes must Hermes support initially?
-- Is human approval required for all champion merges or only configured risk classes?
-- What resource budget should terminate an autonomous research loop?
+Not shipped; do not treat as current architecture:
+
+- Freeform / general-purpose DAG editors (arbitrary node graphs).
+- Temporal durable orchestration and parallel trial scheduling.
+- Hermes / AutoResearchClaw as primary agent.
+- MCP tool nodes; Podman untrusted isolation.
+- Rebase → re-eval → merge queue when champion advances.
+- Content-addressed artifacts; Forgejo multi-user hosting.
+- OpenTelemetry / Prometheus service metrics stack.
+- Configurable trial ancestry (`sibling` / `chained` / `last_runnable`).
+
+See also [MVP_SCOPE.md](MVP_SCOPE.md) and the root [README](../README.md).

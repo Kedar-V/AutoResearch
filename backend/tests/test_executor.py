@@ -100,6 +100,7 @@ def workflow_definition(
         "nodes": nodes,
         "edges": [
             {"id": "hypothesis-to-execution", "source": "hypothesis", "target": "execution"},
+            {"id": "execution-to-eval-script", "source": "execution", "target": "eval_script"},
             {"id": "execution-to-evaluation", "source": "execution", "target": "evaluation"},
             {"id": "eval-to-evaluation", "source": "eval_script", "target": "evaluation"},
             {"id": "evaluation-to-gate", "source": "evaluation", "target": "gate"},

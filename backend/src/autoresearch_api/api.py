@@ -24,7 +24,6 @@ from .models import (
     TrialRecord,
     Workflow,
 )
-from .projects import ProjectError, active_project, create_project, set_active_project
 from .project_reset import (
     ProjectResetError,
     resolve_restart_workflow_id,
@@ -34,6 +33,7 @@ from .project_reset import (
     wipe_remote_git_experiments,
     wiped_payload,
 )
+from .projects import ProjectError, active_project, create_project, set_active_project
 from .run_control import ensure_controller, get_controller, remove_controller
 from .runner import LocalRunner
 from .schemas import (
@@ -54,9 +54,17 @@ from .schemas import (
     WorkflowDefinition,
     WorkflowSummary,
 )
+from .workflow import WorkflowError, compile_recipe
 
 router = APIRouter(prefix="/api")
 SessionDep = Annotated[Session, Depends(get_session)]
+
+
+def _require_valid_recipe(definition: WorkflowDefinition) -> None:
+    try:
+        compile_recipe(definition)
+    except WorkflowError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 NODE_TYPES = [
@@ -166,6 +174,7 @@ def save_workflow(
 ) -> dict:
     if workflow_id != definition.id:
         raise HTTPException(status_code=422, detail="path id must match workflow id")
+    _require_valid_recipe(definition)
     workflow = session.get(Workflow, workflow_id)
     now = datetime.now(UTC)
     project = active_project(session)
@@ -216,8 +225,14 @@ def create_run(
     background_tasks: BackgroundTasks,
     session: SessionDep,
 ) -> Run:
-    if session.get(Workflow, payload.workflow_id) is None:
+    workflow = session.get(Workflow, payload.workflow_id)
+    if workflow is None:
         raise HTTPException(status_code=404, detail="workflow not found")
+    try:
+        definition = WorkflowDefinition.model_validate(workflow.definition)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"invalid workflow definition: {exc}") from exc
+    _require_valid_recipe(definition)
     project = active_project(session)
     run = Run(
         workflow_id=payload.workflow_id,
@@ -408,7 +423,26 @@ def restart_project(
     wiped["tags"] = list(dict.fromkeys([*wiped["tags"], *remote_stats.tags]))
 
     if session.get(Workflow, workflow_id) is None:
-        raise HTTPException(status_code=422, detail=f"workflow {workflow_id!r} not found after reset")
+        raise HTTPException(
+            status_code=422,
+            detail=f"workflow {workflow_id!r} not found after reset",
+        )
+
+    workflow_row = session.get(Workflow, workflow_id)
+    assert workflow_row is not None
+    try:
+        definition = WorkflowDefinition.model_validate(workflow_row.definition)
+        compile_recipe(definition)
+    except WorkflowError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"cannot restart with invalid research recipe: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"cannot restart with invalid workflow definition: {exc}",
+        ) from exc
 
     run = Run(workflow_id=workflow_id, project_id=project.id)
     session.add(run)

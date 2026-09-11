@@ -32,7 +32,13 @@ from .models import (
 from .run_control import RunCancelled, create_controller, get_controller, remove_controller
 from .runner import LocalRunner, RunnerError
 from .schemas import WorkflowDefinition, WorkflowNode
-from .workflow import allowed_paths_from_workflow, find_node, topological_order
+from .workflow import (
+    CompiledLoop,
+    WorkflowError,
+    allowed_paths_from_workflow,
+    compile_recipe,
+    find_node,
+)
 
 
 class ExecutionError(RuntimeError):
@@ -76,14 +82,11 @@ class WorkflowExecutor:
             try:
                 workflow = WorkflowDefinition.model_validate(workflow_row.definition)
                 self.git.verify_repository()
-                ordered = topological_order(workflow)
-                hypothesis = find_node(workflow, "hypothesis")
-                if hypothesis is None:
-                    for node in ordered:
-                        self._checkpoint(session, run)
-                        self._execute_node(session, run, node, context, workflow)
-                else:
-                    self._run_outer_loop(session, run, workflow, hypothesis, context)
+                try:
+                    compiled = compile_recipe(workflow)
+                except WorkflowError as exc:
+                    raise ExecutionError(f"invalid research recipe: {exc}") from exc
+                self._run_outer_loop(session, run, workflow, compiled, context)
                 run.status = "succeeded"
                 self._upsert_chat_summary(session, run)
             except RunCancelled as exc:
@@ -135,26 +138,18 @@ class WorkflowExecutor:
         session: Session,
         run: Run,
         workflow: WorkflowDefinition,
-        hypothesis: WorkflowNode,
+        compiled: CompiledLoop,
         context: dict[str, Any],
     ) -> None:
-        max_hypotheses = self._int_config(hypothesis, "max_hypotheses", 5)
-        for _ in range(max_hypotheses):
+        for _ in range(compiled.max_hypotheses):
             self._checkpoint(session, run)
             context.pop("gate_passed", None)
-            self._execute_node(session, run, hypothesis, context, workflow)
+            self._execute_node(session, run, compiled.hypothesis, context, workflow)
             self._checkpoint(session, run)
-            runnable = self._run_trial_attempts(session, run, hypothesis, workflow, context)
+            runnable = self._run_trial_attempts(session, run, compiled, workflow, context)
             if not runnable:
                 break
-            for node_type in ("eval_script", "evaluation", "metric_gate", "git_decision"):
-                node = find_node(workflow, node_type)
-                if node is None and node_type == "eval_script":
-                    node = find_node(workflow, "evaluation")
-                if node is None:
-                    continue
-                if node_type == "evaluation" and node.type == "eval_script":
-                    continue
+            for node in compiled.post_trial:
                 self._checkpoint(session, run)
                 self._execute_node(session, run, node, context, workflow)
             self._finalize_hypothesis(session, run, context)
@@ -164,14 +159,12 @@ class WorkflowExecutor:
         self,
         session: Session,
         run: Run,
-        hypothesis: WorkflowNode,
+        compiled: CompiledLoop,
         workflow: WorkflowDefinition,
         context: dict[str, Any],
     ) -> bool:
-        max_retries = self._int_config(hypothesis, "max_retries", 3)
-        execution = find_node(workflow, "execution") or find_node(workflow, "script")
-        if execution is None:
-            raise ExecutionError("workflow requires an execution node")
+        max_retries = compiled.max_retries
+        execution = compiled.execution
         for attempt in range(1, max_retries + 1):
             self._checkpoint(session, run)
             trial_run = self._start_trial(session, run, context, attempt)

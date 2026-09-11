@@ -68,6 +68,7 @@ export function buildStarterNodes(): Node<AutoResearchNodeData>[] {
 export function buildStarterEdges(): Edge[] {
   return [
     edge('hypothesis', 'execution', 'hypothesis-execution', 'right', 'left'),
+    edge('execution', 'eval_script', 'execution-eval-script', 'bottom', 'left'),
     edge('execution', 'evaluation', 'execution-evaluation', 'right', 'left'),
     edge('eval_script', 'evaluation', 'eval-script-evaluation', 'top', 'bottom'),
     edge('evaluation', 'metric_gate', 'evaluation-gate', 'right', 'left'),

@@ -2,16 +2,56 @@ import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
 import type { CSSProperties } from 'react'
 
 import { catalogItem, type AutoResearchNodeData } from '../nodeCatalog'
+import type { ResearchNodeType } from '../types'
 
-const HANDLE_SIDES: { id: string; position: Position }[] = [
-  { id: 'top', position: Position.Top },
-  { id: 'right', position: Position.Right },
-  { id: 'bottom', position: Position.Bottom },
-  { id: 'left', position: Position.Left },
-]
+interface PortSpec {
+  id: string
+  type: 'source' | 'target'
+  position: Position
+}
+
+/** Named ports per recipe role — not generic 8-way sockets. */
+const PORTS_BY_TYPE: Partial<Record<ResearchNodeType, PortSpec[]>> = {
+  hypothesis: [
+    { id: 'left', type: 'target', position: Position.Left },
+    { id: 'top', type: 'target', position: Position.Top },
+    { id: 'bottom', type: 'target', position: Position.Bottom },
+    { id: 'right', type: 'source', position: Position.Right },
+  ],
+  execution: [
+    { id: 'left', type: 'target', position: Position.Left },
+    { id: 'right', type: 'source', position: Position.Right },
+    { id: 'bottom', type: 'source', position: Position.Bottom },
+  ],
+  eval_script: [
+    { id: 'left', type: 'target', position: Position.Left },
+    { id: 'top', type: 'source', position: Position.Top },
+    { id: 'right', type: 'source', position: Position.Right },
+  ],
+  evaluation: [
+    { id: 'left', type: 'target', position: Position.Left },
+    { id: 'bottom', type: 'target', position: Position.Bottom },
+    { id: 'right', type: 'source', position: Position.Right },
+  ],
+  metric_gate: [
+    { id: 'left', type: 'target', position: Position.Left },
+    { id: 'right', type: 'source', position: Position.Right },
+  ],
+  git_decision: [
+    { id: 'left', type: 'target', position: Position.Left },
+    { id: 'bottom', type: 'source', position: Position.Bottom },
+  ],
+  database: [],
+  script: [
+    { id: 'left', type: 'target', position: Position.Left },
+    { id: 'right', type: 'source', position: Position.Right },
+  ],
+  trial: [],
+}
 
 export function ResearchNode({ data, selected }: NodeProps<Node<AutoResearchNodeData>>) {
   const item = catalogItem(data.nodeType)
+  const ports = PORTS_BY_TYPE[data.nodeType] ?? []
   const className = [
     'research-node',
     selected ? 'selected' : '',
@@ -24,22 +64,13 @@ export function ResearchNode({ data, selected }: NodeProps<Node<AutoResearchNode
 
   return (
     <div className={className} style={{ '--node-color': item.color } as CSSProperties}>
-      {HANDLE_SIDES.map(({ id, position }) => (
+      {ports.map((port) => (
         <Handle
-          key={`target-${id}`}
-          id={id}
-          type="target"
-          position={position}
-          className={`handle-${id}`}
-        />
-      ))}
-      {HANDLE_SIDES.map(({ id, position }) => (
-        <Handle
-          key={`source-${id}`}
-          id={id}
-          type="source"
-          position={position}
-          className={`handle-${id}`}
+          key={`${port.type}-${port.id}`}
+          id={port.id}
+          type={port.type}
+          position={port.position}
+          className={`handle-${port.id}`}
         />
       ))}
       <div className="node-header">

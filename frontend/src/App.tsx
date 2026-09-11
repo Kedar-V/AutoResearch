@@ -14,10 +14,9 @@ import {
   type Edge,
   type Node,
   type NodeMouseHandler,
-  type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Activity, ChevronDown, ExternalLink, FolderPlus, GitBranch, Pause, Play, RotateCcw, Save, Square, Workflow } from 'lucide-react'
+import { Activity, ChevronDown, Database, ExternalLink, FolderPlus, GitBranch, Pause, Play, RotateCcw, Save, Square, Workflow } from 'lucide-react'
 
 import {
   activateProject,
@@ -46,7 +45,13 @@ import {
   buildProgressPoints,
 } from './components/ProgressStaircase'
 import { ResearchNode } from './components/ResearchNode'
-import { DEFAULT_MODEL, PALETTE_CATALOG, type AutoResearchNodeData } from './nodeCatalog'
+import {
+  DEFAULT_MODEL,
+  RECIPE_PANEL_TYPES,
+  catalogItem,
+  type AutoResearchNodeData,
+} from './nodeCatalog'
+import { compileRecipe, isLegalConnection, isRequiredType } from './recipe'
 import type {
   EvaluationRecord,
   HypothesisRecord,
@@ -59,7 +64,6 @@ import type {
 import {
   buildStarterEdges,
   buildStarterNodes,
-  createCanvasNode,
   currentExecutingNodeId,
   defaultDirectedEdgeOptions,
   fromWorkflowDefinition,
@@ -74,7 +78,6 @@ const defaultWorkflowId = 'default-research-loop'
 const starterNodes = buildStarterNodes()
 
 function CanvasApp() {
-  const [instance, setInstance] = useState<ReactFlowInstance<Node<AutoResearchNodeData>>>()
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<AutoResearchNodeData>>(starterNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(buildStarterEdges())
   const [workflowId, setWorkflowId] = useState(defaultWorkflowId)
@@ -333,11 +336,30 @@ function CanvasApp() {
     return () => window.clearInterval(timer)
   }, [activeRun, project, refreshProject, running])
 
+  const onNodesChangeFiltered = useCallback(
+    (changes: Parameters<typeof onNodesChange>[0]) => {
+      const filtered = changes.filter((change) => {
+        if (change.type !== 'remove') return true
+        const node = nodes.find((candidate) => candidate.id === change.id)
+        if (!node) return true
+        return !isRequiredType(node.data.nodeType)
+      })
+      if (filtered.length) onNodesChange(filtered)
+    },
+    [nodes, onNodesChange],
+  )
+
   const onConnect = useCallback(
     (connection: Connection) => {
       const source = nodes.find((node) => node.id === connection.source)
       const target = nodes.find((node) => node.id === connection.target)
       if (!source || !target || !isRecipeNode(source) || !isRecipeNode(target)) return
+      if (!isLegalConnection(source.data.nodeType, target.data.nodeType)) {
+        setNotice(
+          `Illegal edge ${source.data.nodeType} → ${target.data.nodeType} (not in research recipe grammar)`,
+        )
+        return
+      }
       setEdges((current) =>
         addEdge(
           {
@@ -357,6 +379,12 @@ function CanvasApp() {
       const source = nodes.find((node) => node.id === newConnection.source)
       const target = nodes.find((node) => node.id === newConnection.target)
       if (!source || !target || !isRecipeNode(source) || !isRecipeNode(target)) return
+      if (!isLegalConnection(source.data.nodeType, target.data.nodeType)) {
+        setNotice(
+          `Illegal edge ${source.data.nodeType} → ${target.data.nodeType} (not in research recipe grammar)`,
+        )
+        return
+      }
       setEdges((current) =>
         reconnectEdge(oldEdge, newConnection, current).map((edge) =>
           edge.id === oldEdge.id
@@ -377,27 +405,16 @@ function CanvasApp() {
     if (node.data.nodeType === 'database') setDbOpen(true)
   }, [])
 
-  const onDragStart = (event: React.DragEvent, type: AutoResearchNodeData['nodeType']) => {
-    event.dataTransfer.setData('application/autoresearch-node', type)
-    event.dataTransfer.effectAllowed = 'move'
+  const resetRecipeLayout = () => {
+    const nextNodes = buildStarterNodes()
+    const nextEdges = buildStarterEdges()
+    setNodes(nextNodes)
+    setEdges(nextEdges)
+    setSelectedId(nextNodes[0]?.id ?? null)
+    setConfigDraft(JSON.stringify(nextNodes[0]?.data.config ?? {}, null, 2))
+    setConfigError('')
+    setNotice('Recipe layout reset')
   }
-
-  const onDrop = useCallback(
-    (event: React.DragEvent) => {
-      event.preventDefault()
-      const nodeType = event.dataTransfer.getData(
-        'application/autoresearch-node',
-      ) as AutoResearchNodeData['nodeType']
-      if (!nodeType || nodeType === 'trial' || !instance) return
-      const position = instance.screenToFlowPosition({ x: event.clientX, y: event.clientY })
-      const node = createCanvasNode(nodeType, position)
-      setNodes((current) => [...current, node])
-      setSelectedId(node.id)
-      setConfigDraft(JSON.stringify(node.data.config, null, 2))
-      setConfigError('')
-    },
-    [instance, setNodes],
-  )
 
   const updateName = (name: string) => {
     if (!selectedId) return
@@ -456,23 +473,15 @@ function CanvasApp() {
     [nodes, edges, workflowId],
   )
 
-  const graphValid = useMemo(() => {
-    const has = (type: string) => nodes.some((node) => node.data.nodeType === type)
-    const evalNeeds =
-      edges.some((edge) => {
-        const source = nodes.find((node) => node.id === edge.source)
-        const target = nodes.find((node) => node.id === edge.target)
-        return source?.data.nodeType === 'eval_script' && target?.data.nodeType === 'evaluation'
-      }) &&
-      edges.some((edge) => {
-        const source = nodes.find((node) => node.id === edge.source)
-        const target = nodes.find((node) => node.id === edge.target)
-        return source?.data.nodeType === 'execution' && target?.data.nodeType === 'evaluation'
-      })
-    return has('hypothesis') && has('execution') && has('eval_script') && has('evaluation') && evalNeeds
-  }, [edges, nodes])
+  const recipeCompile = useMemo(() => compileRecipe(definition), [definition])
+  const graphValid = recipeCompile.ok
+  const recipeError = recipeCompile.ok ? '' : recipeCompile.error
 
   const handleSave = async () => {
+    if (!graphValid) {
+      setNotice(recipeError || 'Fix the research recipe before saving')
+      return
+    }
     try {
       await saveWorkflow(definition)
       setNotice('Workflow saved')
@@ -484,7 +493,7 @@ function CanvasApp() {
   const handleRun = async () => {
     if (!graphValid || restarting) {
       if (!graphValid) {
-        setNotice('Connect eval script and execution into the evaluation agent before running')
+        setNotice(recipeError || 'Fix the research recipe before running')
       }
       return
     }
@@ -651,7 +660,22 @@ function CanvasApp() {
             <RotateCcw size={16} />
             {restarting ? 'Restarting…' : 'Restart'}
           </button>
-          <button className="button primary" onClick={handleRun} disabled={running || restarting}>
+          <button
+            className="button secondary"
+            onClick={() => setDbOpen(true)}
+            type="button"
+            disabled={!project}
+            title="Browse project database"
+          >
+            <Database size={16} />
+            DB
+          </button>
+          <button
+            className="button primary"
+            onClick={handleRun}
+            disabled={running || restarting || !graphValid}
+            title={graphValid ? 'Run research loop' : recipeError}
+          >
             <Play size={16} fill="currentColor" />
             {activeRun?.status === 'paused'
               ? 'Paused'
@@ -664,40 +688,40 @@ function CanvasApp() {
 
       <section className="workspace-grid">
         <aside className="palette panel">
-          <div className="panel-heading"><span>Node library</span><small>Drag to canvas</small></div>
-          <div className="palette-list">
-            {PALETTE_CATALOG.map((item) => (
-              <button
-                className="palette-item"
-                draggable
-                key={item.type}
-                onDragStart={(event) => onDragStart(event, item.type)}
-              >
-                <span className="palette-icon" style={{ color: item.color }}>{item.icon}</span>
-                <span><strong>{item.label}</strong><small>{item.description}</small></span>
-              </button>
-            ))}
+          <div className="panel-heading">
+            <span>Research recipe</span>
+            <small>Locked grammar</small>
           </div>
+          <div className="palette-list">
+            {RECIPE_PANEL_TYPES.map((type) => {
+              const item = catalogItem(type)
+              return (
+                <div className="palette-item recipe-role" key={type}>
+                  <span className="palette-icon" style={{ color: item.color }}>{item.icon}</span>
+                  <span><strong>{item.label}</strong><small>{item.description}</small></span>
+                </div>
+              )
+            })}
+          </div>
+          <button className="button secondary full" type="button" onClick={resetRecipeLayout}>
+            Reset recipe layout
+          </button>
           <div className="legend">
             <GitBranch size={15} />
-            <span>Self-heal and gate feedback edges close the research loop.</span>
+            <span>
+              Edges must follow the recipe grammar. Required nodes cannot be deleted.
+              Self-heal and feedback close the loop.
+            </span>
           </div>
+          {recipeError && <p className="form-error">{recipeError}</p>}
         </aside>
 
-        <div
-          className="canvas-wrap"
-          onDrop={onDrop}
-          onDragOver={(event) => {
-            event.preventDefault()
-            event.dataTransfer.dropEffect = 'move'
-          }}
-        >
+        <div className="canvas-wrap">
           <ReactFlow
             nodes={displayNodes}
             edges={displayEdges}
             nodeTypes={nodeTypes}
-            onInit={setInstance}
-            onNodesChange={onNodesChange}
+            onNodesChange={onNodesChangeFiltered}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onReconnect={onReconnect}

@@ -74,22 +74,11 @@ def test_restart_project_endpoint_wipes_and_starts_run(
 
     _seed_experiment_repo(project_repo)
     workflow_path = project_repo / "research-loop.json"
-    workflow_def = {
-        "schema_version": "1",
-        "id": "bench-loop",
-        "name": "bench loop",
-        "description": "",
-        "nodes": [
-            {
-                "id": "hypothesis",
-                "type": "hypothesis",
-                "name": "Hypothesis",
-                "position": {"x": 0, "y": 0},
-                "config": {"title": "t", "max_hypotheses": 1},
-            }
-        ],
-        "edges": [],
-    }
+    from .test_workflow import research_recipe
+
+    workflow_def = research_recipe().model_dump(mode="json")
+    workflow_def["id"] = "bench-loop"
+    workflow_def["name"] = "bench loop"
     workflow_path.write_text(json.dumps(workflow_def), encoding="utf-8")
     git(project_repo, "add", "research-loop.json")
     git(project_repo, "commit", "-m", "add loop")

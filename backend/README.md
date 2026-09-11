@@ -5,19 +5,30 @@ FastAPI control plane for the local, Git-native AutoResearch MVP.
 ## Run locally
 
 ```bash
-uv sync --project backend --extra dev --extra postgres
+uv sync --project backend --extra dev --extra postgres --extra observability
+# Optional memory SDK:
+# uv sync --project backend --extra memory
 cp backend/.env.example backend/.env
-uv run --project backend uvicorn autoresearch_api.main:app --reload --port 8000
+set -a; source backend/.env; set +a
+uv run --project backend uvicorn autoresearch_api.main:app --reload --reload-dir backend --port 8000
 ```
 
 Prefer PostgreSQL via Docker (`make postgres-up`) and `backend/.env` (see
 `.env.example`). The code default is SQLite so tests and smoke runs work
 without a local server.
-a private GitHub repo via `gh` when available, seeds the math fixture, and
-registers a `proj_<slug>` schema name (CREATE SCHEMA on Postgres).
 
-Hypothesis and trial rows are stored with `project_id` for handoff and the DB
-explorer. Git remains the branch/tag ledger.
+**New Project** creates a private GitHub repo via `gh` when available, seeds the
+math fixture, and registers a `proj_<slug>` schema name (`CREATE SCHEMA` on
+Postgres). Hypothesis and trial rows are stored with `project_id` for handoff
+and the DB explorer (ORM tables remain in `public`). Git remains the
+branch/tag/notes ledger.
+
+**Restart** (`POST /api/projects/{id}/restart`) wipes experiment refs and
+project ledger rows, keeps the champion tip, and starts a fresh run.
+
+Workflows must compile as a **research recipe** (`compile_recipe` in
+`workflow.py`). Invalid graphs return HTTP **422** on save, create-run, and
+restart. See HLD §6 and `frontend/src/recipe.ts`.
 
 ## Evaluator contract
 
@@ -29,6 +40,11 @@ Evaluation commands must print exactly one JSON object to stdout:
 
 Metric values must be numbers. Eval script nodes reject candidates that modify
 configured protected paths before the evaluator runs.
+
+## Ports
+
+- `observability/` — Langfuse / noop (agents never import the vendor SDK)
+- `memory/` — Honcho / Hindsight / composite / noop (prefs only; not research SoR)
 
 ## Checks
 

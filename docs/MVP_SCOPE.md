@@ -4,26 +4,37 @@ The MVP proves one complete research loop on a trusted local repository.
 
 ## Included
 
-- Visual DAG with Hypothesis, Execution, Eval script, Evaluation agent, Metric gate, Git decision, optional Script allow-list, and DB viewer; trials are Hypothesis children from the inner retry loop
-- Closed outer loop: Git decision feeds Hypothesis; Execution→Hypothesis is the self-heal cycle
-- Versioned workflow JSON shared by frontend and backend
-- Hypothesis and trial branches created from the configured champion branch
-- Dedicated Git worktrees for trial execution
+- **Locked research recipe** canvas (not a freeform DAG): exactly one Hypothesis, Execution, Eval script, Evaluation agent, Metric gate, and Git decision; optional DB viewer; typed ports; required nodes undeletable
+- Shared recipe compiler (`compile_recipe` / `compileRecipe` → `CompiledLoop`) in UI + API + executor; illegal graphs rejected on save/run/restart (HTTP 422)
+- Closed outer loop: Git decision → Hypothesis; Execution→Hypothesis self-heal; post-trial spine `eval_script → evaluation → metric_gate → git_decision`
+- Versioned workflow JSON in SQL (shared contracts under `contracts/`)
+- Hypothesis and trial branches from the configured champion branch (`master` by default)
+- Dedicated Git worktrees for trial execution; `allowed_paths` on the execution node
 - Trusted local subprocess execution with explicit environment and timeout controls
 - Structured evaluator output and a maximize/minimize metric gate
-- Git-backed hypothesis, evaluation, and decision records
-- PostgreSQL as preferred SoR (projects, hypotheses, trials, chat handoff); SQLite for tests
-- Agent/hypothesis/trial slide-over and DB explorer
-- New Project: private GitHub repo + math seed + project schema registration
-- Live run status and metric results in the browser
+- Git-backed hypothesis, evaluation, decision, and champions notes + decision tags
+- PostgreSQL as preferred SoR (projects, workflows, runs, hypotheses, trials, chat handoff); SQLite for tests
+- Optional Cursor/OpenAI agents: planner (`use_planner`), execution edits (`use_agent`), evaluation judgments (`use_agent` + optional explainability schema)
+- Optional Langfuse observability via `AgentObservability` (`noop` | `langfuse-*`)
+- Optional agent memory via `AgentMemory` (`noop` | `honcho` | `hindsight` | `composite`)
+- Project Restart: wipe experiment ledger/refs, keep champion tip, auto-start a fresh run
+- Run controls: cancel / pause / resume; Reset recipe layout
+- Agent/hypothesis/trial slide-over, evaluation slide-over, and DB explorer
+- New Project: private GitHub repo + math seed + `proj_<slug>` schema registration
+- Live run status and metric staircases in the browser
 
 ## Deferred
 
+- Freeform / general-purpose DAG editors
 - Podman and execution of untrusted code
 - Temporal and distributed workers
-- Hermes-driven autonomous repair loops
+- Hermes / AutoResearchClaw as the agent runtime
+- MCP tool nodes
+- Automatic rebase → re-eval → merge when the champion advances underfoot
+- Configurable trial ancestry (`sibling` / `chained` / `last_runnable`)
 - Multi-user authentication and real-time collaboration
 - Remote GPU scheduling
-- External artifact storage
+- External content-addressed artifact storage
+- OpenTelemetry / Prometheus service stack
 
-Hermes integration is represented by a replaceable agent boundary in the MVP architecture, but autonomous hypothesis generation is added only after the deterministic execution loop is proven.
+Agents today are Cursor SDK / OpenAI modules behind replaceable boundaries. Hermes remains a deferred alternative runtime, not the shipped path.

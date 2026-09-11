@@ -95,6 +95,7 @@ Prefer one focused change over many simultaneous edits unless history shows a co
       commit_message: 'trial: apply candidate',
       use_agent: false,
       model: DEFAULT_MODEL,
+      allowed_paths: ['score.txt', 'train.py'],
     },
   },
   {
@@ -167,8 +168,18 @@ Prefer one focused change over many simultaneous edits unless history shows a co
   },
 ]
 
-export const PALETTE_CATALOG = NODE_CATALOG.filter((item) => item.type !== 'trial')
+/** Recipe canvas is locked — palette does not add nodes. */
+export const PALETTE_CATALOG: CatalogItem[] = []
 
+/** Roles shown in the locked recipe panel. */
+export const RECIPE_PANEL_TYPES: ResearchNodeType[] = [
+  'hypothesis',
+  'execution',
+  'eval_script',
+  'evaluation',
+  'metric_gate',
+  'git_decision',
+]
 export function catalogItem(type: ResearchNodeType): CatalogItem {
   const item = NODE_CATALOG.find((candidate) => candidate.type === type)
   if (!item) throw new Error(`Unknown node type: ${type}`)

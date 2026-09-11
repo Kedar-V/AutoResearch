@@ -21,38 +21,38 @@
 </head>
 <body>
 <main>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 650" role="img" aria-labelledby="diagram-title diagram-desc">
-  <title id="diagram-title">AutoResearch high-level architecture</title>
-  <desc id="diagram-desc">A researcher builds a DAG in the web canvas. The API coordinates workers that execute agents, MCP tools, and trusted local scripts, while Git is canonical and PostgreSQL is a rebuildable projection.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 620" role="img" aria-labelledby="diagram-title diagram-desc">
+  <title id="diagram-title">AutoResearch shipped architecture</title>
+  <desc id="diagram-desc">Researcher uses a locked React Flow research recipe. FastAPI compiles the recipe and runs the in-process executor with Cursor/OpenAI agents and trusted scripts. Git is the research ledger; Postgres or SQLite is the control plane. Optional Langfuse and Honcho/Hindsight ports soft-fail.</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="var(--line)" /></marker></defs>
-  <text x="40" y="38" class="title">AutoResearch — Git-native closed-loop research</text>
+  <text x="40" y="38" class="title">AutoResearch — shipped MVP architecture</text>
 
-  <path class="edge" d="M170 128 H225" /><path class="edge" d="M405 128 H460" /><path class="edge" d="M640 128 H695" />
-  <path class="edge" d="M790 178 V245" /><path class="edge" d="M695 290 H640" /><path class="edge" d="M550 335 V400" />
-  <path class="edge" d="M460 290 H415" /><path class="edge" d="M325 335 V400" /><path class="edge" d="M235 290 H180" />
-  <path class="edge" d="M505 445 H415" /><path class="edge" d="M415 470 H505" /><path class="edge" d="M705 445 H760" />
-  <path class="edge" d="M895 445 H950 V178 H885" />
+  <path class="edge" d="M170 120 H225" /><path class="edge" d="M405 120 H460" /><path class="edge" d="M640 120 H695" />
+  <path class="edge" d="M790 170 V230" /><path class="edge" d="M695 275 H640" /><path class="edge" d="M550 320 V385" />
+  <path class="edge" d="M460 275 H415" /><path class="edge" d="M325 320 V385" /><path class="edge" d="M235 275 H180" />
+  <path class="edge" d="M505 430 H415" /><path class="edge" d="M705 430 H760" />
+  <path class="edge" d="M550 170 V230" />
 
-  <rect x="210" y="70" width="705" height="130" class="zone" /><text x="230" y="94" class="small" style="text-anchor:start">CONTROL PLANE</text>
-  <rect x="210" y="215" width="705" height="145" class="zone" /><text x="230" y="239" class="small" style="text-anchor:start">EXECUTION PLANE</text>
-  <rect x="210" y="375" width="705" height="140" class="zone" /><text x="230" y="399" class="small" style="text-anchor:start">RESEARCH STATE</text>
+  <rect x="210" y="60" width="705" height="120" class="zone" /><text x="230" y="84" class="small" style="text-anchor:start">CONTROL PLANE</text>
+  <rect x="210" y="200" width="705" height="145" class="zone" /><text x="230" y="224" class="small" style="text-anchor:start">EXECUTION</text>
+  <rect x="210" y="360" width="705" height="130" class="zone" /><text x="230" y="384" class="small" style="text-anchor:start">RESEARCH STATE</text>
 
-  <rect x="40" y="88" width="130" height="80" class="node input" /><text x="105" y="121" class="label">Researcher</text><text x="105" y="143" class="small">builds and observes</text>
-  <rect x="225" y="88" width="180" height="80" class="node input" /><text x="315" y="121" class="label">React Flow canvas</text><text x="315" y="143" class="small">typed executable DAG</text>
-  <rect x="460" y="88" width="180" height="80" class="node process" /><text x="550" y="121" class="label">FastAPI control plane</text><text x="550" y="143" class="small">validate and compile</text>
-  <rect x="695" y="88" width="190" height="90" class="node process" /><text x="790" y="124" class="label">Temporal</text><text x="790" y="146" class="small">durable orchestration</text>
+  <rect x="40" y="80" width="130" height="80" class="node input" /><text x="105" y="113" class="label">Researcher</text><text x="105" y="135" class="small">canvas · restart</text>
+  <rect x="225" y="80" width="180" height="80" class="node input" /><text x="315" y="113" class="label">Locked recipe UI</text><text x="315" y="135" class="small">:5173 · typed ports</text>
+  <rect x="460" y="80" width="180" height="80" class="node process" /><text x="550" y="113" class="label">FastAPI</text><text x="550" y="135" class="small">:8000 · compile_recipe</text>
+  <rect x="695" y="80" width="190" height="80" class="node process" /><text x="790" y="113" class="label">CompiledLoop</text><text x="790" y="135" class="small">WorkflowExecutor</text>
 
-  <rect x="695" y="245" width="190" height="90" class="node process" /><text x="790" y="280" class="label">Execution worker</text><text x="790" y="302" class="small">worktrees and policies</text>
-  <rect x="460" y="245" width="180" height="90" class="node external" /><text x="550" y="278" class="label">Hermes + ARC</text><text x="550" y="300" class="small">hypotheses and repairs</text>
-  <rect x="235" y="245" width="180" height="90" class="node external" /><text x="325" y="278" class="label">MCP tools</text><text x="325" y="300" class="small">typed integrations</text>
-  <rect x="50" y="245" width="130" height="90" class="node process" /><text x="115" y="278" class="label">Local runner</text><text x="115" y="300" class="small">trusted scripts</text>
+  <rect x="695" y="230" width="190" height="90" class="node process" /><text x="790" y="265" class="label">LocalRunner</text><text x="790" y="287" class="small">trusted scripts</text>
+  <rect x="460" y="230" width="180" height="90" class="node external" /><text x="550" y="258" class="label">Agents</text><text x="550" y="278" class="small">planner · code · eval</text><text x="550" y="296" class="small">Cursor / OpenAI</text>
+  <rect x="235" y="230" width="180" height="90" class="node external" /><text x="325" y="258" class="label">Optional ports</text><text x="325" y="278" class="small">Langfuse · Honcho</text><text x="325" y="296" class="small">Hindsight · composite</text>
+  <rect x="50" y="230" width="130" height="90" class="node process" /><text x="115" y="265" class="label">Worktrees</text><text x="115" y="287" class="small">trial isolation</text>
 
-  <rect x="235" y="400" width="180" height="90" class="node storage" /><text x="325" y="433" class="label">Git ledger</text><text x="325" y="455" class="small">canonical evidence</text><text x="325" y="472" class="small">branches · notes · tags</text>
-  <rect x="505" y="400" width="200" height="90" class="node storage" /><text x="605" y="433" class="label">PostgreSQL</text><text x="605" y="455" class="small">rebuildable projection</text><text x="605" y="472" class="small">queries · live state</text>
-  <rect x="760" y="400" width="135" height="90" class="node storage" /><text x="827" y="433" class="label">Artifacts</text><text x="827" y="455" class="small">content-addressed</text>
+  <rect x="235" y="385" width="180" height="90" class="node storage" /><text x="325" y="418" class="label">Git ledger</text><text x="325" y="440" class="small">branches · notes · tags</text><text x="325" y="457" class="small">champion = master</text>
+  <rect x="505" y="385" width="200" height="90" class="node storage" /><text x="605" y="418" class="label">Postgres / SQLite</text><text x="605" y="440" class="small">projects · runs · ledger</text><text x="605" y="457" class="small">handoff · UI queries</text>
+  <rect x="760" y="385" width="135" height="90" class="node storage" /><text x="827" y="418" class="label">Ops</text><text x="827" y="440" class="small">:5432 SoR</text><text x="827" y="457" class="small">:5434 Langfuse DB</text>
 
-  <text x="540" y="575" class="label">Promotion invariant</text>
-  <text x="540" y="604" class="small">candidate + protected evaluator + latest main → improve → merge; otherwise record and reject</text>
+  <text x="540" y="545" class="label">Promotion invariant</text>
+  <text x="540" y="574" class="small">clean champion + matching base + gate accept → merge --no-ff; else reject / fail and keep ledger</text>
 </svg>
 </main>
 </body>

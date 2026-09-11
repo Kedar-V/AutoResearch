@@ -8,6 +8,15 @@ from sqlalchemy.orm import Session
 from autoresearch_api.database import get_session
 from autoresearch_api.main import create_app
 
+from .test_workflow import research_recipe
+
+
+def _valid_workflow(workflow_id: str = "api-flow") -> dict:
+    definition = research_recipe().model_dump(mode="json")
+    definition["id"] = workflow_id
+    definition["name"] = workflow_id
+    return definition
+
 
 def test_workflow_round_trip(session: Session) -> None:
     app = create_app()
@@ -16,24 +25,17 @@ def test_workflow_round_trip(session: Session) -> None:
         yield session
 
     app.dependency_overrides[get_session] = override_session
-    workflow = {
-        "schema_version": "1",
-        "id": "api-flow",
-        "name": "API flow",
-        "description": "Round-trip test",
-        "nodes": [],
-        "edges": [],
-    }
+    workflow = _valid_workflow()
 
     with TestClient(app) as client:
         assert client.get("/health").json() == {"status": "ok"}
         saved = client.put("/api/workflows/api-flow", json=workflow)
         assert saved.status_code == 200
-        assert saved.json() == workflow
+        assert saved.json()["id"] == "api-flow"
 
         loaded = client.get("/api/workflows/api-flow")
         assert loaded.status_code == 200
-        assert loaded.json() == workflow
+        assert loaded.json()["id"] == "api-flow"
 
         listing = client.get("/api/workflows")
         assert listing.status_code == 200
@@ -47,19 +49,66 @@ def test_workflow_path_must_match_definition(session: Session) -> None:
         yield session
 
     app.dependency_overrides[get_session] = override_session
-    workflow = {
-        "schema_version": "1",
-        "id": "actual-id",
-        "name": "Mismatch",
-        "nodes": [],
-        "edges": [],
-    }
+    workflow = _valid_workflow("actual-id")
 
     with TestClient(app) as client:
         response = client.put("/api/workflows/wrong-id", json=workflow)
 
     assert response.status_code == 422
     assert response.json()["detail"] == "path id must match workflow id"
+
+
+def test_save_rejects_disconnected_gate(session: Session) -> None:
+    app = create_app()
+
+    def override_session() -> Iterator[Session]:
+        yield session
+
+    app.dependency_overrides[get_session] = override_session
+    workflow = _valid_workflow("bad-gate")
+    workflow["edges"] = [
+        edge
+        for edge in workflow["edges"]
+        if edge["id"] not in {"a-g", "g-d"}
+    ]
+
+    with TestClient(app) as client:
+        response = client.put("/api/workflows/bad-gate", json=workflow)
+
+    assert response.status_code == 422
+    assert "metric_gate" in response.json()["detail"]
+
+
+def test_create_run_rejects_invalid_recipe(session: Session) -> None:
+    from autoresearch_api.models import Workflow
+
+    app = create_app()
+
+    def override_session() -> Iterator[Session]:
+        yield session
+
+    app.dependency_overrides[get_session] = override_session
+    session.add(
+        Workflow(
+            id="broken-flow",
+            name="broken",
+            description="",
+            definition={
+                "schema_version": "1",
+                "id": "broken-flow",
+                "name": "broken",
+                "nodes": [],
+                "edges": [],
+            },
+        )
+    )
+    session.commit()
+
+    with TestClient(app) as client:
+        response = client.post("/api/runs", json={"workflow_id": "broken-flow"})
+
+    assert response.status_code == 422
+    assert "hypothesis" in response.json()["detail"]
 
 
 def test_list_project_evaluations(session: Session) -> None:

@@ -1,7 +1,8 @@
 import type { Edge } from '@xyflow/react'
 import { describe, expect, it } from 'vitest'
 
-import { NODE_CATALOG, PALETTE_CATALOG } from './nodeCatalog'
+import { NODE_CATALOG, PALETTE_CATALOG, RECIPE_PANEL_TYPES } from './nodeCatalog'
+import { compileRecipe, isLegalConnection } from './recipe'
 import {
   buildStarterEdges,
   buildStarterNodes,
@@ -35,16 +36,15 @@ describe('workflow canvas helpers', () => {
     }
   })
 
-  it('keeps trial out of the palette and builds the closed-loop starter graph', () => {
-    expect(PALETTE_CATALOG.map((item) => item.type)).toEqual([
+  it('locks the palette and builds the closed-loop starter graph', () => {
+    expect(PALETTE_CATALOG).toEqual([])
+    expect(RECIPE_PANEL_TYPES).toEqual([
       'hypothesis',
-      'script',
       'execution',
       'eval_script',
       'evaluation',
       'metric_gate',
       'git_decision',
-      'database',
     ])
 
     const nodes = buildStarterNodes()
@@ -61,6 +61,7 @@ describe('workflow canvas helpers', () => {
     ])
     expect(edges.map(({ source, target }) => [source, target])).toEqual([
       ['hypothesis', 'execution'],
+      ['execution', 'eval_script'],
       ['execution', 'evaluation'],
       ['eval_script', 'evaluation'],
       ['evaluation', 'metric_gate'],
@@ -69,6 +70,42 @@ describe('workflow canvas helpers', () => {
       ['git_decision', 'hypothesis'],
     ])
     expect(edges.every((edge) => edge.markerEnd)).toBe(true)
+  })
+
+  it('compiles the starter graph into a valid research recipe', () => {
+    const definition = toWorkflowDefinition(
+      'default-research-loop',
+      'default-research-loop',
+      buildStarterNodes(),
+      buildStarterEdges(),
+    )
+    const result = compileRecipe(definition)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.recipe.postTrial.map((node) => node.type)).toEqual([
+      'eval_script',
+      'evaluation',
+      'metric_gate',
+      'git_decision',
+    ])
+  })
+
+  it('rejects a disconnected metric gate', () => {
+    const nodes = buildStarterNodes()
+    const edges = buildStarterEdges().filter(
+      (edge) => !(edge.source === 'evaluation' && edge.target === 'metric_gate'),
+    )
+    const definition = toWorkflowDefinition('broken', 'broken', nodes, edges)
+    const result = compileRecipe(definition)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toMatch(/evaluation → metric_gate/)
+  })
+
+  it('only allows legal recipe connections', () => {
+    expect(isLegalConnection('hypothesis', 'execution')).toBe(true)
+    expect(isLegalConnection('hypothesis', 'metric_gate')).toBe(false)
+    expect(isLegalConnection('evaluation', 'eval_script')).toBe(false)
   })
 
   it('serializes React Flow nodes and edges into the backend workflow contract', () => {
@@ -80,8 +117,8 @@ describe('workflow canvas helpers', () => {
       id: 'edge-execution-evaluation',
       source: 'execution-1',
       target: 'evaluation-1',
-      sourceHandle: 'artifacts',
-      targetHandle: 'candidate',
+      sourceHandle: 'right',
+      targetHandle: 'left',
     }]
 
     expect(toWorkflowDefinition('workflow-1', 'Research loop', nodes, edges)).toEqual({
@@ -109,8 +146,8 @@ describe('workflow canvas helpers', () => {
         id: 'edge-execution-evaluation',
         source: 'execution-1',
         target: 'evaluation-1',
-        source_port: 'artifacts',
-        target_port: 'candidate',
+        source_port: 'right',
+        target_port: 'left',
       }],
     })
   })
