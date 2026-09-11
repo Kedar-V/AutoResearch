@@ -28,6 +28,7 @@ class Project(Base):
     pg_schema: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(24), default="active")
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    preferred_base_commit: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -133,6 +134,19 @@ class TrialRecord(Base):
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FrontierPointRecord(Base):
+    """Non-dominated trial commits for Pareto promotion (opt-in gate policy)."""
+
+    __tablename__ = "frontier_points"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    commit: Mapped[str] = mapped_column(String(64), index=True)
+    trial_id: Mapped[str] = mapped_column(String(48))
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ChatMessage(Base):

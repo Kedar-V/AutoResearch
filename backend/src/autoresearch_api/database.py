@@ -37,6 +37,7 @@ def ensure_schema(bind=engine) -> None:
         "workflows": [("project_id", "VARCHAR(36)")],
         "runs": [("project_id", "VARCHAR(36)")],
         "metrics": [("project_id", "VARCHAR(36)")],
+        "projects": [("preferred_base_commit", "VARCHAR(64)")],
     }
     with bind.begin() as connection:
         for table_name, columns in alterations.items():

@@ -262,15 +262,21 @@ If the champion advanced underfoot, merge fails with “champion advanced”
 - Eval scripts and protected paths are not writable by candidates.
 - Eval stdout must be a single JSON object with numeric `metrics` (any number of
   named metrics may be emitted for logging / agent judgment).
-- **MVP metric gate is single-objective only:** exactly one configured
-  `metric` + `direction` (`minimize` | `maximize`) + `min_delta`, compared to
-  the live champion baseline for that metric when available. This matches
+- **Default metric gate is scalar:** exactly one configured `metric` +
+  `direction` (`minimize` | `maximize`) + `min_delta`, compared to the live
+  champion baseline for that metric when available. This matches
   `contracts/evaluation.schema.json` (`primary_metric`, `direction`) and the
   example gate in `examples/basic-research/research-loop.json`.
-- Multi-objective, Pareto fronts, threshold bands with tolerances, and
-  statistical-significance policies are **not** MVP behavior (design/deferred
-  only).
-- Malformed eval / gate failure never merges.
+- **Opt-in Pareto policy:** set `policy: "pareto"` with `objectives[]`
+  (`metric`, `direction`, `epsilon`) and optional `hard_gates[]`. Candidates
+  that pass hard gates and are not ε-dominated are **kept** on a frontier
+  (Git notes/tags + SQL); they are **not** auto-merged to `master`. Humans
+  select the next hypothesis base via `POST /api/projects/{id}/frontier/select`
+  (optional `promote: true` merges onto the champion). See
+  `contracts/frontier.schema.json` and `examples/pareto-research/`.
+- Threshold bands with tolerances and statistical-significance policies remain
+  deferred.
+- Malformed eval / scalar gate failure never merges; Pareto DISCARD never merges.
 
 ## 9. Failure handling
 
@@ -328,8 +334,9 @@ Not shipped; do not treat as current architecture:
 - Hermes / AutoResearchClaw as primary agent.
 - MCP tool nodes; Podman untrusted isolation.
 - Rebase → re-eval → merge queue when champion advances.
-- Multi-objective / Pareto / tolerance-band / statistical gate policies
-  (MVP remains one primary metric + direction + `min_delta`).
+- Auto-pick utility / crowding over Pareto frontiers; tolerance-band /
+  statistical gate policies (ε-Pareto KEEP/DISCARD is shipped as opt-in
+  `policy: "pareto"` beside the default scalar gate).
 - Content-addressed artifacts; Forgejo multi-user hosting.
 - OpenTelemetry / Prometheus service metrics stack.
 - Configurable trial ancestry (`sibling` / `chained` / `last_runnable`).

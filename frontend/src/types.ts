@@ -97,6 +97,7 @@ export interface ProjectRead {
   local_path: string
   pg_schema: string
   status: string
+  preferred_base_commit?: string | null
   created_at: string
 }
 
@@ -173,4 +174,23 @@ export interface HandoffRead {
   champion_metrics: Record<string, number>
   hypotheses: HypothesisRecord[]
   trials: TrialRecord[]
+}
+
+export interface FrontierPoint {
+  commit: string
+  trial_id: string
+  metrics: Record<string, number>
+  created_at: string
+}
+
+export interface FrontierRead {
+  points: FrontierPoint[]
+  preferred_base_commit: string | null
+}
+
+export interface FrontierSelectRead {
+  project: ProjectRead
+  preferred_base_commit: string
+  promoted: boolean
+  champion_commit: string | null
 }

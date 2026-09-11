@@ -16,6 +16,7 @@ from .git_service import GitService
 from .models import (
     ChatMessage,
     ChatSummary,
+    FrontierPointRecord,
     HypothesisRecord,
     Metric,
     NodeRun,
@@ -23,6 +24,7 @@ from .models import (
     Run,
     TrialRecord,
     Workflow,
+    utcnow,
 )
 from .project_reset import (
     ProjectResetError,
@@ -47,6 +49,10 @@ from .schemas import (
     EvaluationEvidence,
     EvaluationRead,
     EvaluationSignals,
+    FrontierPointRead,
+    FrontierRead,
+    FrontierSelect,
+    FrontierSelectRead,
     GitHubStatusRead,
     HandoffRead,
     HypothesisRead,
@@ -132,18 +138,21 @@ NODE_TYPES = [
     NodeTypeDefinition(
         type="metric_gate",
         label="Metric gate",
-        description="Compare one emitted metric with a baseline.",
+        description="Scalar champion compare (default) or opt-in ε-Pareto frontier policy.",
         config_schema={
+            "policy": "scalar|pareto",
             "metric": "string",
             "baseline": "number",
             "min_delta": "number",
             "direction": "maximize|minimize",
+            "objectives": "[{metric, direction, epsilon}]",
+            "hard_gates": "[{metric, finite?, equals?, min?, max?}]",
         },
     ),
     NodeTypeDefinition(
         type="git_decision",
         label="Git decision",
-        description="Record and tag the decision, then merge an accepted trial.",
+        description="Scalar: merge accepted trials. Pareto: tag KEEP/DISCARD without auto-merge.",
         config_schema={},
     ),
     NodeTypeDefinition(
@@ -700,6 +709,108 @@ def list_trials(project_id: str, session: SessionDep) -> list[TrialRead]:
         )
     )
     return [_trial_read(row) for row in rows]
+
+
+@router.get("/projects/{project_id}/frontier", response_model=FrontierRead)
+def get_frontier(project_id: str, session: SessionDep) -> FrontierRead:
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    rows = list(
+        session.scalars(
+            select(FrontierPointRecord)
+            .where(FrontierPointRecord.project_id == project_id)
+            .order_by(FrontierPointRecord.created_at.asc())
+        )
+    )
+    return FrontierRead(
+        points=[
+            FrontierPointRead(
+                commit=row.commit,
+                trial_id=row.trial_id,
+                metrics={k: float(v) for k, v in (row.metrics or {}).items()},
+                created_at=row.created_at,
+            )
+            for row in rows
+        ],
+        preferred_base_commit=project.preferred_base_commit,
+    )
+
+
+@router.post("/projects/{project_id}/frontier/select", response_model=FrontierSelectRead)
+def select_frontier_point(
+    project_id: str, payload: FrontierSelect, session: SessionDep
+) -> FrontierSelectRead:
+    """Seed next hypotheses from a frontier commit; optionally promote onto champion."""
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+    point = None
+    if len(payload.commit) >= 40:
+        point = session.scalar(
+            select(FrontierPointRecord).where(
+                FrontierPointRecord.project_id == project_id,
+                FrontierPointRecord.commit == payload.commit,
+            )
+        )
+    else:
+        matches = list(
+            session.scalars(
+                select(FrontierPointRecord).where(
+                    FrontierPointRecord.project_id == project_id,
+                    FrontierPointRecord.commit.startswith(payload.commit),
+                )
+            )
+        )
+        if len(matches) > 1:
+            raise HTTPException(status_code=400, detail="ambiguous frontier commit prefix")
+        point = matches[0] if matches else None
+    if point is None:
+        raise HTTPException(status_code=404, detail="frontier commit not found")
+
+    champion_commit: str | None = None
+    promoted = False
+    if payload.promote:
+        trial = session.get(TrialRecord, f"{project_id}:{point.trial_id}")
+        if trial is None or not trial.branch:
+            raise HTTPException(
+                status_code=400, detail="trial branch missing for frontier point; cannot promote"
+            )
+        hypo = session.get(HypothesisRecord, trial.hypothesis_id)
+        if hypo is None or not hypo.base_commit:
+            raise HTTPException(
+                status_code=400, detail="hypothesis base missing for frontier point; cannot promote"
+            )
+        try:
+            settings = get_settings()
+            git = GitService(Path(project.local_path), settings.runtime_root, settings.champion_branch)
+            champion_commit = git.merge_trial(trial.branch, hypo.base_commit)
+            git.record_champion(
+                champion_commit,
+                {
+                    "schema_version": "1",
+                    "trial_id": point.trial_id,
+                    "candidate_commit": point.commit,
+                    "champion_commit": champion_commit,
+                    "metrics": point.metrics or {},
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "source": "frontier_select",
+                },
+            )
+            promoted = True
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    project.preferred_base_commit = champion_commit or point.commit
+    project.updated_at = utcnow()
+    session.commit()
+    session.refresh(project)
+    return FrontierSelectRead(
+        project=ProjectRead.model_validate(project),
+        preferred_base_commit=project.preferred_base_commit or point.commit,
+        promoted=promoted,
+        champion_commit=champion_commit,
+    )
 
 
 @router.get("/projects/{project_id}/evaluations", response_model=list[EvaluationRead])

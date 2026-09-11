@@ -24,6 +24,7 @@ import {
   createProject,
   createRun,
   getActiveProject,
+  getFrontier,
   getGitHubStatus,
   getRun,
   getWorkflow,
@@ -36,10 +37,12 @@ import {
   restartProject,
   resumeRun,
   saveWorkflow,
+  selectFrontierPoint,
 } from './api'
 import { AgentSlideOver } from './components/AgentSlideOver'
 import { DbSlideOver } from './components/DbSlideOver'
 import { EvaluationSlideOver } from './components/EvaluationSlideOver'
+import { FrontierPanel } from './components/FrontierPanel'
 import { LiveRunStatus, deriveRunProgress } from './components/LiveRunStatus'
 import {
   ProgressStaircase,
@@ -55,6 +58,7 @@ import {
 import { compileRecipe, isLegalConnection, isRequiredType } from './recipe'
 import type {
   EvaluationRecord,
+  FrontierRead,
   HypothesisRecord,
   NodeRunRead,
   ProjectRead,
@@ -95,6 +99,8 @@ function CanvasApp() {
   const [hypotheses, setHypotheses] = useState<HypothesisRecord[]>([])
   const [trials, setTrials] = useState<TrialRecord[]>([])
   const [evaluations, setEvaluations] = useState<EvaluationRecord[]>([])
+  const [frontier, setFrontier] = useState<FrontierRead | null>(null)
+  const [frontierSelecting, setFrontierSelecting] = useState(false)
   const [agentOpen, setAgentOpen] = useState(false)
   const [evalOpen, setEvalOpen] = useState(false)
   const [focusHypothesisId, setFocusHypothesisId] = useState<string | null>(null)
@@ -188,6 +194,8 @@ function CanvasApp() {
   }, [activeRun, edges])
 
   const gateNode = nodes.find((node) => node.data.nodeType === 'metric_gate')
+  const gatePolicy = String(gateNode?.data.config.policy ?? 'scalar')
+  const showFrontier = gatePolicy === 'pareto' || (frontier?.points.length ?? 0) > 0
   const metricName = String(gateNode?.data.config.metric ?? 'score')
   const metricDirection =
     gateNode?.data.config.direction === 'maximize' ? 'maximize' : 'minimize'
@@ -274,14 +282,16 @@ function CanvasApp() {
 
     if (active) {
       try {
-        const [hypos, trialRows, evalRows] = await Promise.all([
+        const [hypos, trialRows, evalRows, frontierRead] = await Promise.all([
           listHypotheses(active.id),
           listTrials(active.id),
           listEvaluations(active.id),
+          getFrontier(active.id).catch(() => null),
         ])
         setHypotheses(hypos)
         setTrials(trialRows)
         setEvaluations(evalRows)
+        setFrontier(frontierRead)
         const nextWorkflowId = await loadProjectWorkflow(active)
         await syncActiveRun(nextWorkflowId, active.id)
       } catch (error) {
@@ -291,6 +301,7 @@ function CanvasApp() {
       setHypotheses([])
       setTrials([])
       setEvaluations([])
+      setFrontier(null)
       setActiveRun(null)
     }
   }, [loadProjectWorkflow, syncActiveRun])
@@ -301,15 +312,17 @@ function CanvasApp() {
       const activated = await activateProject(projectId)
       setProject(activated)
       setActiveRun(null)
-      const [hypos, trialRows, evalRows, listed] = await Promise.all([
+      const [hypos, trialRows, evalRows, listed, frontierRead] = await Promise.all([
         listHypotheses(activated.id),
         listTrials(activated.id),
         listEvaluations(activated.id),
         listProjects(),
+        getFrontier(activated.id).catch(() => null),
       ])
       setHypotheses(hypos)
       setTrials(trialRows)
       setEvaluations(evalRows)
+      setFrontier(frontierRead)
       setProjects(listed)
       const nextWorkflowId = await loadProjectWorkflow(activated)
       await syncActiveRun(nextWorkflowId, activated.id)
@@ -330,12 +343,14 @@ function CanvasApp() {
         const next = await getRun(activeRun.id)
         setActiveRun(next)
         if (project) {
-          const [hypos, trialRows] = await Promise.all([
+          const [hypos, trialRows, frontierRead] = await Promise.all([
             listHypotheses(project.id),
             listTrials(project.id),
+            getFrontier(project.id).catch(() => null),
           ])
           setHypotheses(hypos)
           setTrials(trialRows)
+          if (frontierRead) setFrontier(frontierRead)
         }
         if (next.status === 'succeeded') {
           setNotice('Run completed')
@@ -547,6 +562,7 @@ function CanvasApp() {
       setHypotheses([])
       setTrials([])
       setEvaluations([])
+      setFrontier(null)
       setActiveRun(result.run)
       await loadProjectWorkflow(result.project)
       setProjects(await listProjects())
@@ -555,6 +571,21 @@ function CanvasApp() {
       setNotice(error instanceof Error ? error.message : 'Could not restart project')
     } finally {
       setRestarting(false)
+    }
+  }
+
+  const handleSelectFrontier = async (commit: string) => {
+    if (!project || frontierSelecting) return
+    setFrontierSelecting(true)
+    try {
+      const result = await selectFrontierPoint(project.id, commit)
+      setProject(result.project)
+      setFrontier(await getFrontier(project.id))
+      setNotice(`Next hypothesis will seed from ${commit.slice(0, 8)}`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not select frontier point')
+    } finally {
+      setFrontierSelecting(false)
     }
   }
 
@@ -625,6 +656,7 @@ function CanvasApp() {
       setProjectName('')
       setHypotheses([])
       setTrials([])
+      setFrontier(null)
       setActiveRun(null)
       await loadProjectWorkflow(created)
       const remoteNote = created.github_url ? ` · ${created.github_url}` : ' · local only'
@@ -851,6 +883,14 @@ function CanvasApp() {
               }}
             />
           </div>
+
+          {showFrontier && (
+            <FrontierPanel
+              frontier={frontier}
+              selecting={frontierSelecting}
+              onSelect={handleSelectFrontier}
+            />
+          )}
 
           <div className="run-panel">
             <div className="panel-heading compact"><span>Latest run</span><Activity size={15} /></div>

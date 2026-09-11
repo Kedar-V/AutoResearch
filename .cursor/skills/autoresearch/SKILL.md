@@ -453,8 +453,10 @@ In `research-loop.json` hypothesis/execution/evaluation config:
 - `use_agent: true` on **execution** — Cursor/OpenAI edits allow-listed files, then the
   execution `command` runs training (e.g. `run_train.py` / `train.py`)
 - `eval_script` — trusted metrics-only step (reads `metrics.json`); does not train
-- `metric_gate` — **single** primary `metric` + `direction` + `min_delta` only
-  (multi-objective / Pareto / tolerance / significance policies are not MVP)
+- `metric_gate` — default **scalar** primary `metric` + `direction` + `min_delta`;
+  set `policy: "pareto"` with `objectives[]` / optional `hard_gates[]` for ε-frontier
+  KEEP (no auto-merge). Select next base via Frontier UI or
+  `POST /api/projects/{id}/frontier/select`
 - `use_agent: true` on **evaluation** — Cursor/OpenAI writes real accept/reject/retry judgments (not a metric template)
 - `explainability_schema` on **evaluation** only — optional JSON Schema for custom
   explainability fields under `explainability` (confidence, attribution, etc.).
