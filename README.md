@@ -32,6 +32,7 @@ Behavior:
 
 - Gate green: accept, merge into `master`, next hypothesis from the new champion.
 - Gate red: reject, leave `master` unchanged, next hypothesis from last stable champion.
+- The metric gate is **one primary metric** + `direction` + `min_delta` (see contracts and the basic-research example). Extra metrics in eval JSON are fine for logging/agents; multi-objective / Pareto / tolerance / significance policies are not MVP.
 - **Restart** (UI or `POST /api/projects/{id}/restart`): wipe experiment ledger/refs, keep champion tip, start a fresh run (recipe must still compile).
 - Click Hypothesis for the agent → hypo → trial slide-over; toolbar **DB** opens the project table explorer.
 
@@ -156,7 +157,7 @@ make check
 
 ## Deferred features
 
-Hermes automation, Podman isolation, Temporal orchestration, distributed workers, MCP tool nodes, parallel scheduling, rebase/re-eval merge queues, and autonomous repair loops beyond inner retries are deferred. The MVP runner is for trusted local scripts only. Langfuse observability and Honcho/Hindsight memory are optional swappable backends (default off).
+Hermes automation, Podman isolation, Temporal orchestration, distributed workers, MCP tool nodes, parallel scheduling, rebase/re-eval merge queues, multi-objective/Pareto/tolerance/significance gates, and autonomous repair loops beyond inner retries are deferred. The MVP runner is for trusted local scripts only. Langfuse observability and Honcho/Hindsight memory are optional swappable backends (default off). The shipped gate remains a single primary metric.
 
 ## License
 
