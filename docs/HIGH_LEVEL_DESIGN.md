@@ -132,6 +132,8 @@ Hermes is a replaceable reasoning component. The platform supplies context deriv
 
 Optional agent observability (default off) uses a vendor-agnostic `AgentObservability` port. Users select `noop`, `langfuse-cloud`, or `langfuse-selfhost` (local OSS via `ops/langfuse`). The Langfuse adapter stores full agent prompts/generations and heuristic scores; Git evaluation notes carry opaque `agent_trace_id` values so the vendor remains swappable. Scientific explainability (metrics, gates, decisions) stays in Git.
 
+Optional agent memory (default off) uses a parallel `AgentMemory` port (`noop` | `honcho` | `hindsight` | `composite`). Honcho and Hindsight are independent adapters behind the same Protocol; composite fans out retain and merges recall. Memory holds preferences and soft lessons only — never champion code, gates, or trial branches.
+
 ### 5.6 Git ledger
 
 Git is authoritative for source code, workflow definitions, ancestry, agent patches, evaluation policy, evaluator version, fingerprints, metrics, decisions, champion merges, and artifact manifests.

@@ -18,6 +18,7 @@ from .hypothesis_brief import (
     summarize_outcome,
 )
 from .hypothesis_planner import HypothesisPlanError, plan_hypothesis
+from .memory import retain_research_lesson
 from .models import (
     ChatSummary,
     HypothesisRecord,
@@ -283,6 +284,8 @@ class WorkflowExecutor:
         workflow: WorkflowDefinition,
     ) -> tuple[dict[str, Any], str, str]:
         project_id = run.project_id or self._ensure_default_project(session, run)
+        context.setdefault("project_id", project_id)
+        context.setdefault("run_id", run.id)
         existing = list(
             session.scalars(
                 select(HypothesisRecord)
@@ -931,6 +934,23 @@ class WorkflowExecutor:
         record.what_did_not = what_did_not
         record.updated_at = datetime.now(UTC)
         session.commit()
+        lesson = what_worked or what_did_not
+        if lesson:
+            retain_research_lesson(
+                content=lesson,
+                kind="outcome",
+                context={
+                    "project_id": project_id,
+                    "run_id": str(run.id),
+                    "hypothesis_id": hypothesis_id,
+                    "trial_id": str(run.trial_id or ""),
+                },
+                metadata={
+                    "accepted": accepted,
+                    "hypothesis_id": hypothesis_id,
+                    "gate_metric": str(context.get("gate_metric") or ""),
+                },
+            )
 
     @staticmethod
     def _hypothesis_dict(row: HypothesisRecord) -> dict[str, Any]:
@@ -1005,6 +1025,17 @@ class WorkflowExecutor:
             summary.summary = text
             summary.updated_at = datetime.now(UTC)
         session.commit()
+        retain_research_lesson(
+            content=text,
+            kind="note",
+            context={
+                "project_id": run.project_id,
+                "run_id": run.id,
+                "hypothesis_id": str(run.hypothesis_id or ""),
+                "trial_id": str(run.trial_id or ""),
+            },
+            metadata={"source": "chat_summary", "run_status": run.status},
+        )
 
     def _ensure_default_project(self, session: Session, run: Run) -> str:
         project = session.scalar(select(Project).where(Project.is_active.is_(True)))

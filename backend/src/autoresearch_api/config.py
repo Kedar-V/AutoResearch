@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     langfuse_secret_key: str = ""
     # Cloud default; selfhost mode overrides to http://localhost:3000 when unset/cloud.
     langfuse_host: str = "https://cloud.langfuse.com"
+    # Agent memory (preferences / soft lessons). Default noop — Git/Postgres stay SoR.
+    # Select: noop | honcho | hindsight | composite
+    memory_backend: str = "noop"
+    # For composite: comma-separated provider names, e.g. "honcho,hindsight"
+    memory_providers: str = ""
+    honcho_api_key: str = ""
+    honcho_workspace_id: str = "autoresearch"
+    honcho_base_url: str = ""
+    hindsight_api_key: str = ""
+    hindsight_api_url: str = ""
+    hindsight_bank_prefix: str = "autoresearch"
 
     @field_validator("project_root", "runtime_root", mode="before")
     @classmethod

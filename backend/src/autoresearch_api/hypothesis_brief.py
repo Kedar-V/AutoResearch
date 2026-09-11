@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .memory import format_memory_section, recall_for_research
+
 DEFAULT_HISTORY_WINDOW = 10
 
 DEFAULT_SYSTEM_PROMPT = """You are the research agent for this repository.
@@ -88,6 +90,21 @@ def build_hypothesis_brief(
                 ]
                 or ["No negative lessons yet."]
             ),
+        ]
+    )
+
+    memory_query = (
+        f"{title}. Gate: {_success_criteria(gate, context)}. "
+        f"Last decision: {context.get('last_decision') or ''}."
+    )
+    memory_section = format_memory_section(
+        recall_for_research(query=memory_query, context=context, limit=6)
+    )
+    if memory_section:
+        sections.extend(["", memory_section])
+
+    sections.extend(
+        [
             "",
             "## Required plan checklist",
             _bullet_list(
