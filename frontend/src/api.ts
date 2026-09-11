@@ -3,6 +3,7 @@ import type {
   HandoffRead,
   HypothesisRecord,
   ProjectRead,
+  ProjectRestartRead,
   RunRead,
   TrialRecord,
   WorkflowDefinition,
@@ -83,6 +84,12 @@ export function createProject(name: string) {
 
 export function activateProject(projectId: string) {
   return request<ProjectRead>(`/api/projects/${projectId}/activate`, {
+    method: 'POST',
+  })
+}
+
+export function restartProject(projectId: string) {
+  return request<ProjectRestartRead>(`/api/projects/${projectId}/restart`, {
     method: 'POST',
   })
 }

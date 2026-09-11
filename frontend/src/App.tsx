@@ -17,7 +17,7 @@ import {
   type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Activity, ChevronDown, ExternalLink, FolderPlus, GitBranch, Pause, Play, Save, Square, Workflow } from 'lucide-react'
+import { Activity, ChevronDown, ExternalLink, FolderPlus, GitBranch, Pause, Play, RotateCcw, Save, Square, Workflow } from 'lucide-react'
 
 import {
   activateProject,
@@ -33,6 +33,7 @@ import {
   listRuns,
   listTrials,
   pauseRun,
+  restartProject,
   resumeRun,
   saveWorkflow,
 } from './api'
@@ -95,6 +96,7 @@ function CanvasApp() {
   const [dbOpen, setDbOpen] = useState(false)
   const [projectName, setProjectName] = useState('')
   const [projectDialog, setProjectDialog] = useState(false)
+  const [restarting, setRestarting] = useState(false)
 
   const selected = nodes.find((node) => node.id === selectedId) ?? null
   const running =
@@ -234,20 +236,39 @@ function CanvasApp() {
   }, [])
 
   const refreshProject = useCallback(async () => {
-    const [active, listed] = await Promise.all([getActiveProject(), listProjects()])
+    let listed: ProjectRead[] = []
+    try {
+      listed = await listProjects()
+      setProjects(listed)
+    } catch (error) {
+      setProjects([])
+      setNotice(error instanceof Error ? error.message : 'Could not list projects')
+      return
+    }
+
+    let active: ProjectRead | null = null
+    try {
+      active = await getActiveProject()
+    } catch {
+      active = listed[0] ?? null
+    }
     setProject(active)
-    setProjects(listed)
+
     if (active) {
-      const [hypos, trialRows, evalRows] = await Promise.all([
-        listHypotheses(active.id),
-        listTrials(active.id),
-        listEvaluations(active.id),
-      ])
-      setHypotheses(hypos)
-      setTrials(trialRows)
-      setEvaluations(evalRows)
-      const nextWorkflowId = await loadProjectWorkflow(active)
-      await syncActiveRun(nextWorkflowId, active.id)
+      try {
+        const [hypos, trialRows, evalRows] = await Promise.all([
+          listHypotheses(active.id),
+          listTrials(active.id),
+          listEvaluations(active.id),
+        ])
+        setHypotheses(hypos)
+        setTrials(trialRows)
+        setEvaluations(evalRows)
+        const nextWorkflowId = await loadProjectWorkflow(active)
+        await syncActiveRun(nextWorkflowId, active.id)
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : 'Could not load project data')
+      }
     } else {
       setHypotheses([])
       setTrials([])
@@ -461,8 +482,10 @@ function CanvasApp() {
   }
 
   const handleRun = async () => {
-    if (!graphValid) {
-      setNotice('Connect eval script and execution into the evaluation agent before running')
+    if (!graphValid || restarting) {
+      if (!graphValid) {
+        setNotice('Connect eval script and execution into the evaluation agent before running')
+      }
       return
     }
     try {
@@ -476,7 +499,7 @@ function CanvasApp() {
   }
 
   const handleCancel = async () => {
-    if (!activeRun) return
+    if (!activeRun || restarting) return
     try {
       const next = await cancelRun(activeRun.id)
       setActiveRun(next)
@@ -486,8 +509,33 @@ function CanvasApp() {
     }
   }
 
+  const handleRestart = async () => {
+    if (!project || restarting) return
+    const confirmed = window.confirm(
+      `Restart ${project.name}?\n\nThis wipes experiment history (hypotheses, trials, runs, Git experiment refs) and starts a fresh run. Champion code on master is kept.`,
+    )
+    if (!confirmed) return
+    setRestarting(true)
+    setNotice('Restarting project…')
+    try {
+      const result = await restartProject(project.id)
+      setProject(result.project)
+      setHypotheses([])
+      setTrials([])
+      setEvaluations([])
+      setActiveRun(result.run)
+      await loadProjectWorkflow(result.project)
+      setProjects(await listProjects())
+      setNotice('Restarted — fresh run started')
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Could not restart project')
+    } finally {
+      setRestarting(false)
+    }
+  }
+
   const handlePause = async () => {
-    if (!activeRun) return
+    if (!activeRun || restarting) return
     try {
       await pauseRun(activeRun.id)
       setNotice('Pause requested — finishing current node…')
@@ -497,7 +545,7 @@ function CanvasApp() {
   }
 
   const handleResume = async () => {
-    if (!activeRun) return
+    if (!activeRun || restarting) return
     try {
       await resumeRun(activeRun.id)
       setNotice('Resuming…')
@@ -579,21 +627,31 @@ function CanvasApp() {
           </button>
           <button className="button secondary" onClick={handleSave}><Save size={16} />Save</button>
           {canPause && (
-            <button className="button secondary" onClick={handlePause} type="button">
+            <button className="button secondary" onClick={handlePause} type="button" disabled={restarting}>
               <Pause size={16} fill="currentColor" />Pause
             </button>
           )}
           {canResume && (
-            <button className="button primary" onClick={handleResume} type="button">
+            <button className="button primary" onClick={handleResume} type="button" disabled={restarting}>
               <Play size={16} fill="currentColor" />Resume
             </button>
           )}
           {canCancel && (
-            <button className="button danger" onClick={handleCancel} type="button">
+            <button className="button danger" onClick={handleCancel} type="button" disabled={restarting}>
               <Square size={14} fill="currentColor" />Cancel
             </button>
           )}
-          <button className="button primary" onClick={handleRun} disabled={running}>
+          <button
+            className="button secondary"
+            onClick={handleRestart}
+            type="button"
+            disabled={!project || restarting}
+            title="Wipe experiment history, keep champion, start a fresh run"
+          >
+            <RotateCcw size={16} />
+            {restarting ? 'Restarting…' : 'Restart'}
+          </button>
+          <button className="button primary" onClick={handleRun} disabled={running || restarting}>
             <Play size={16} fill="currentColor" />
             {activeRun?.status === 'paused'
               ? 'Paused'

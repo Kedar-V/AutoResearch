@@ -217,6 +217,9 @@ Default target is the **active project** (often `tinylm-bench`). Do **not**
 reset `master` to an older seed unless explicitly asked — keep current champion
 code; only wipe experiment ledger + refs.
 
+UI **Restart** (topbar) calls `POST /api/projects/{id}/restart` — same wipe +
+auto-starts a fresh run. Prefer that for interactive resets.
+
 Substitute:
 
 | Var | Example (`tinylm-bench`) |

@@ -25,7 +25,16 @@ from .models import (
     Workflow,
 )
 from .projects import ProjectError, active_project, create_project, set_active_project
-from .run_control import ensure_controller, get_controller
+from .project_reset import (
+    ProjectResetError,
+    resolve_restart_workflow_id,
+    upsert_restart_chat_summary,
+    wipe_local_git_experiments,
+    wipe_project_database,
+    wipe_remote_git_experiments,
+    wiped_payload,
+)
+from .run_control import ensure_controller, get_controller, remove_controller
 from .runner import LocalRunner
 from .schemas import (
     DiffRead,
@@ -37,6 +46,8 @@ from .schemas import (
     NodeTypeDefinition,
     ProjectCreate,
     ProjectRead,
+    ProjectRestartRead,
+    ProjectRestartWiped,
     RunCreate,
     RunRead,
     TrialRead,
@@ -331,6 +342,89 @@ def activate_project(project_id: str, session: SessionDep) -> Project:
         return set_active_project(session, project_id)
     except ProjectError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/restart", response_model=ProjectRestartRead)
+def restart_project(
+    project_id: str,
+    background_tasks: BackgroundTasks,
+    session: SessionDep,
+) -> ProjectRestartRead:
+    """Wipe experiment ledger/refs (keep champion), then start a fresh run."""
+    settings = get_settings()
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    active_runs = list(
+        session.scalars(
+            select(Run)
+            .where(
+                Run.project_id == project_id,
+                Run.status.in_(("queued", "running", "paused")),
+            )
+            .options(selectinload(Run.node_runs))
+        )
+    )
+    now = datetime.now(UTC)
+    for run in active_runs:
+        controller = get_controller(run.id)
+        if controller is not None:
+            controller.request_cancel()
+        run.status = "cancelled"
+        run.error = "Cancelled by project restart"
+        run.finished_at = now
+        for node_run in run.node_runs:
+            if node_run.status in {"running", "queued"}:
+                node_run.status = "cancelled"
+                node_run.stderr = "Cancelled by project restart"
+                node_run.finished_at = now
+        remove_controller(run.id)
+    session.commit()
+
+    repo = Path(project.local_path)
+    try:
+        local_stats = wipe_local_git_experiments(
+            repo,
+            champion_branch=settings.champion_branch,
+            runtime_root=settings.runtime_root,
+        )
+        remote_stats = wipe_remote_git_experiments(repo)
+    except ProjectResetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    runs_removed = wipe_project_database(session, project_id)
+    upsert_restart_chat_summary(session, project)
+    try:
+        set_active_project(session, project_id)
+        workflow_id = resolve_restart_workflow_id(session, project)
+    except (ProjectError, ProjectResetError) as exc:
+        session.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    local_stats.runs = runs_removed
+    wiped = wiped_payload(local_stats)
+    wiped["branches"] = list(dict.fromkeys([*wiped["branches"], *remote_stats.branches]))
+    wiped["tags"] = list(dict.fromkeys([*wiped["tags"], *remote_stats.tags]))
+
+    if session.get(Workflow, workflow_id) is None:
+        raise HTTPException(status_code=422, detail=f"workflow {workflow_id!r} not found after reset")
+
+    run = Run(workflow_id=workflow_id, project_id=project.id)
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+    session.refresh(project)
+    ensure_controller(run.id)
+    background_tasks.add_task(_execute_run, run.id)
+
+    # Reload with node_runs for response shape
+    run = _load_run(session, run.id)
+    return ProjectRestartRead(
+        project=ProjectRead.model_validate(project),
+        run=RunRead.model_validate(run),
+        wiped=ProjectRestartWiped.model_validate(wiped),
+    )
 
 
 def _public_id(value: str) -> str:

@@ -130,6 +130,17 @@ class ProjectRead(BaseModel):
     created_at: datetime
 
 
+class ProjectRestartWiped(BaseModel):
+    branches: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    runs: int = 0
+
+
+class ProjectRestartRead(BaseModel):
+    project: ProjectRead
+    run: RunRead
+    wiped: ProjectRestartWiped
+
 class HypothesisRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

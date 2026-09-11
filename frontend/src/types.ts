@@ -100,6 +100,16 @@ export interface ProjectRead {
   created_at: string
 }
 
+export interface ProjectRestartRead {
+  project: ProjectRead
+  run: RunRead
+  wiped: {
+    branches: string[]
+    tags: string[]
+    runs: number
+  }
+}
+
 export interface EvaluationRecord {
   schema_version: '2'
   evaluation_id: string
