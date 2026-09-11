@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Git-native AutoResearch MVP control plane"
 requires-python = ">=3.11"
 dependencies = [
+  "cursor-sdk>=1.0.31",
   "fastapi>=0.116,<1",
   "pydantic-settings>=2.10,<3",
   "sqlalchemy>=2.0,<3",
@@ -16,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.2,<4"]
+observability = ["langfuse>=2.60,<4"]
 dev = [
   "httpx>=0.28,<1",
   "pytest>=8.4,<9",

@@ -4,14 +4,17 @@ The MVP proves one complete research loop on a trusted local repository.
 
 ## Included
 
-- Visual DAG with hypothesis, trial, script, evaluation, metric-gate, and Git-decision nodes
+- Visual DAG with Hypothesis, Execution, Eval script, Evaluation agent, Metric gate, Git decision, optional Script allow-list, and DB viewer; trials are Hypothesis children from the inner retry loop
+- Closed outer loop: Git decision feeds Hypothesis; Execution→Hypothesis is the self-heal cycle
 - Versioned workflow JSON shared by frontend and backend
 - Hypothesis and trial branches created from the configured champion branch
 - Dedicated Git worktrees for trial execution
 - Trusted local subprocess execution with explicit environment and timeout controls
 - Structured evaluator output and a maximize/minimize metric gate
 - Git-backed hypothesis, evaluation, and decision records
-- PostgreSQL-backed query projection, with SQLite available for tests
+- PostgreSQL as preferred SoR (projects, hypotheses, trials, chat handoff); SQLite for tests
+- Agent/hypothesis/trial slide-over and DB explorer
+- New Project: private GitHub repo + math seed + project schema registration
 - Live run status and metric results in the browser
 
 ## Deferred

@@ -1,0 +1,25 @@
+# AutoResearch control-plane Postgres (preferred SoR).
+# Host port 5432 — do not confuse with Langfuse Postgres on 5434.
+services:
+  postgres:
+    image: docker.io/postgres:16
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autoresearch -d autoresearch"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    environment:
+      POSTGRES_USER: autoresearch
+      POSTGRES_PASSWORD: autoresearch
+      POSTGRES_DB: autoresearch
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - 127.0.0.1:5432:5432
+    volumes:
+      - autoresearch_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  autoresearch_postgres_data:
+    driver: local

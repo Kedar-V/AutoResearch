@@ -1,11 +1,18 @@
 # Basic Research Example
 
-This is a small target repository for the AutoResearch MVP. `score.txt` starts at `1.0`. The workflow runs `train.py`, which writes `0.5`, then `eval.py`, which prints the required evaluator result:
+Minimize `score.txt` from `5.0` toward `0.0`. Each accepted hypothesis runs
+`train.py` (decrement by one), then `eval.py`, which prints:
 
 ```json
-{"metrics": {"score": 0.5}}
+{"metrics": {"score": <number>}}
 ```
 
-The included metric gate minimizes `score` against a baseline of `1.0`, so this candidate is accepted and merged into the target's `master` branch. To see a rejected trial, change `train.py` to write a value greater than or equal to the current champion score, such as `1.5`. Do not edit `eval.py`: it is protected and the run will fail before that evaluator executes.
+The metric gate minimizes `score` against the current champion (baseline `5.0`
+on a fresh project). Five accepted hypotheses take the champion from `5` → `0`.
+Hypothesis `max_retries` covers execution failures; `max_hypotheses` bounds the
+outer loop. Do not edit `eval.py`: it is protected.
 
-Initialize this directory as a Git repository with its baseline committed on `master`, then set `AUTORESEARCH_PROJECT_ROOT` to this directory and save/run `research-loop.json` through AutoResearch.
+Initialize this directory as a Git repository with its baseline committed on
+`master`, set `AUTORESEARCH_PROJECT_ROOT` here, and save/run `research-loop.json`
+through AutoResearch. Or use **New Project** in the UI to seed an equivalent
+fixture into a fresh private GitHub repo.

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -18,10 +18,27 @@ def new_id() -> str:
     return str(uuid4())
 
 
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    github_url: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    local_path: Mapped[str] = mapped_column(String(500))
+    pg_schema: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(24), default="active")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Workflow(Base):
     __tablename__ = "workflows"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True
+    )
     name: Mapped[str] = mapped_column(String(120))
     description: Mapped[str] = mapped_column(Text, default="")
     definition: Mapped[dict[str, Any]] = mapped_column(JSON)
@@ -34,6 +51,9 @@ class Run(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     workflow_id: Mapped[str] = mapped_column(ForeignKey("workflows.id"))
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True
+    )
     status: Mapped[str] = mapped_column(String(24), default="queued")
     hypothesis_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     trial_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
@@ -71,6 +91,64 @@ class Metric(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"))
+    project_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("projects.id"), nullable=True
+    )
     name: Mapped[str] = mapped_column(String(120), index=True)
     value: Mapped[float] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class HypothesisRecord(Base):
+    __tablename__ = "hypotheses"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    branch: Mapped[str] = mapped_column(String(200), default="")
+    base_commit: Mapped[str] = mapped_column(String(64), default="")
+    champion_commit_at_start: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(24), default="open")
+    what_worked: Mapped[str] = mapped_column(Text, default="")
+    what_did_not: Mapped[str] = mapped_column(Text, default="")
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TrialRecord(Base):
+    __tablename__ = "trials"
+
+    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    hypothesis_id: Mapped[str] = mapped_column(String(80), ForeignKey("hypotheses.id"), index=True)
+    branch: Mapped[str] = mapped_column(String(200), default="")
+    worktree_path: Mapped[str] = mapped_column(String(500), default="")
+    candidate_commit: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(24), default="running")
+    error: Mapped[str] = mapped_column(Text, default="")
+    next_step: Mapped[str] = mapped_column(Text, default="")
+    what_changed: Mapped[str] = mapped_column(Text, default="")
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    role: Mapped[str] = mapped_column(String(24))
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ChatSummary(Base):
+    __tablename__ = "chat_summaries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), unique=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
