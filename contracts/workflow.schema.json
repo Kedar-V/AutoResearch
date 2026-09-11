@@ -36,7 +36,17 @@
       "properties": {
         "id": { "type": "string", "minLength": 1, "maxLength": 80 },
         "type": {
-          "enum": ["hypothesis", "trial", "script", "evaluation", "metric_gate", "git_decision"]
+          "enum": [
+            "hypothesis",
+            "trial",
+            "script",
+            "execution",
+            "eval_script",
+            "evaluation",
+            "metric_gate",
+            "git_decision",
+            "database"
+          ]
         },
         "name": { "type": "string", "minLength": 1, "maxLength": 120 },
         "position": { "$ref": "#/$defs/position" },

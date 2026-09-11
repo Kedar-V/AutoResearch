@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,13 +32,21 @@ class GitService:
         self.runtime_root = runtime_root.resolve()
         self.champion_branch = champion_branch
 
-    def _git(self, *args: str, cwd: Path | None = None) -> str:
+    def _git(
+        self,
+        *args: str,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        input_text: str | None = None,
+    ) -> str:
         result = subprocess.run(
             ["git", *args],
             cwd=cwd or self.project_root,
             text=True,
             capture_output=True,
             check=False,
+            env=env,
+            input=input_text,
         )
         if result.returncode:
             message = result.stderr.strip() or result.stdout.strip()
@@ -44,6 +56,12 @@ class GitService:
     def verify_repository(self) -> None:
         if self._git("rev-parse", "--is-inside-work-tree") != "true":
             raise GitError(f"{self.project_root} is not a Git worktree")
+        toplevel = Path(self._git("rev-parse", "--show-toplevel")).resolve()
+        if toplevel != self.project_root:
+            raise GitError(
+                f"{self.project_root} is not a Git repository root (found {toplevel}). "
+                "Initialize the target project with its own .git."
+            )
         self._git("rev-parse", "--verify", self.champion_branch)
 
     def head(self, ref: str = "HEAD", cwd: Path | None = None) -> str:
@@ -53,12 +71,21 @@ class GitService:
         return not self._git("status", "--porcelain", cwd=cwd)
 
     def create_hypothesis(
-        self, hypothesis_id: str, title: str, description: str
+        self,
+        hypothesis_id: str,
+        title: str,
+        description: str,
+        *,
+        files: dict[str, str] | None = None,
     ) -> tuple[str, str]:
         slug = self._slug(title)
         branch = f"hypothesis/{hypothesis_id}-{slug}"
         base_commit = self.head(self.champion_branch)
-        tree = self._git("rev-parse", f"{base_commit}^{{tree}}")
+        tree = (
+            self._write_tree_with_files(base_commit, files)
+            if files
+            else self._git("rev-parse", f"{base_commit}^{{tree}}")
+        )
         hypothesis_commit = self._git(
             "commit-tree",
             tree,
@@ -67,6 +94,7 @@ class GitService:
             "-m",
             f"research(hypothesis): {title}",
         )
+        self._delete_branch_if_present(branch)
         self._git("branch", branch, hypothesis_commit)
         record = {
             "schema_version": "1",
@@ -81,6 +109,29 @@ class GitService:
         self.add_note("research/hypotheses", hypothesis_commit, record)
         return branch, base_commit
 
+    def _write_tree_with_files(self, base_commit: str, files: dict[str, str]) -> str:
+        """Create a tree from base_commit with additional/overwritten blob paths."""
+        with tempfile.NamedTemporaryFile(prefix="autoresearch-index-", delete=False) as handle:
+            index_path = Path(handle.name)
+        env = {**os.environ, "GIT_INDEX_FILE": str(index_path)}
+        try:
+            self._git("read-tree", base_commit, env=env)
+            for relative_path, contents in files.items():
+                path = relative_path.strip("/")
+                if not path or path.startswith("../") or "/../" in f"/{path}/":
+                    raise GitError(f"invalid hypothesis file path: {relative_path}")
+                blob = self._git("hash-object", "-w", "--stdin", input_text=contents)
+                self._git(
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    f"100644,{blob},{path}",
+                    env=env,
+                )
+            return self._git("write-tree", env=env)
+        finally:
+            index_path.unlink(missing_ok=True)
+
     def create_trial(
         self, hypothesis_id: str, trial_number: int, hypothesis_branch: str
     ) -> TrialWorkspace:
@@ -88,6 +139,8 @@ class GitService:
         trial_branch = f"trial/{hypothesis_id}/T{trial_number:03d}"
         path = self.runtime_root / "worktrees" / hypothesis_id / f"T{trial_number:03d}"
         path.parent.mkdir(parents=True, exist_ok=True)
+        self._remove_worktree_if_present(path)
+        self._delete_branch_if_present(trial_branch)
         self._git("worktree", "add", "-b", trial_branch, str(path), hypothesis_branch)
         return TrialWorkspace(
             hypothesis_id=hypothesis_id,
@@ -150,7 +203,9 @@ class GitService:
                 f"project root must be on {self.champion_branch!r}, found {current_branch!r}"
             )
         if not self.is_clean():
-            raise GitError("champion worktree must be clean before promotion")
+            dirty = self._git("status", "--porcelain").strip()
+            detail = f":\n{dirty}" if dirty else ""
+            raise GitError(f"champion worktree must be clean before promotion{detail}")
         if self.head(self.champion_branch) != hypothesis_base_commit:
             raise GitError("champion advanced; candidate must be rebased and re-evaluated")
         self._git(
@@ -161,6 +216,63 @@ class GitService:
             f"Merge accepted AutoResearch trial {trial_branch}",
         )
         return self.head(self.champion_branch)
+
+    def has_origin(self) -> bool:
+        remotes = self._git("remote")
+        return "origin" in remotes.splitlines()
+
+    def push_research_to_origin(self) -> dict[str, Any]:
+        """Push champion, hypothesis/trial branches, and decision tags to origin."""
+        if not self.has_origin():
+            return {"pushed": False, "reason": "no origin remote"}
+        refs = [self.champion_branch]
+        listed = self._git(
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/hypothesis",
+            "refs/heads/trial",
+        )
+        refs.extend(branch for branch in listed.splitlines() if branch)
+        for ref in refs:
+            self._git("push", "-u", "origin", ref)
+        with contextlib.suppress(GitError):
+            self._git("push", "origin", "--tags")
+        with contextlib.suppress(GitError):
+            self._git("push", "origin", "refs/notes/*")
+        return {"pushed": True, "refs": refs}
+
+    def diff(self, base_commit: str, candidate_commit: str) -> str:
+        return self._git("diff", "--no-color", base_commit, candidate_commit)
+
+    def assert_only_allowed_paths_changed(
+        self, base_commit: str, candidate_commit: str, allowed_paths: list[str]
+    ) -> None:
+        if not allowed_paths:
+            return
+        changed = self._git("diff", "--name-only", base_commit, candidate_commit)
+        if not changed:
+            return
+        illegal = [
+            path
+            for path in changed.splitlines()
+            if not any(
+                path == allowed or path.startswith(f"{allowed.rstrip('/')}/")
+                for allowed in allowed_paths
+            )
+        ]
+        if illegal:
+            raise GitError(f"candidate modified paths outside allow-list: {', '.join(illegal)}")
+
+    def _remove_worktree_if_present(self, path: Path) -> None:
+        if path.exists():
+            with contextlib.suppress(GitError):
+                self._git("worktree", "remove", "--force", str(path))
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+
+    def _delete_branch_if_present(self, branch: str) -> None:
+        with contextlib.suppress(GitError):
+            self._git("branch", "-D", branch)
 
     @staticmethod
     def _slug(value: str) -> str:
