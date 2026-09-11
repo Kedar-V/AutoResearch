@@ -39,10 +39,10 @@ Evaluation commands must print exactly one JSON object to stdout:
 ```
 
 Metric values must be numbers. Additional metric keys are allowed for logging
-and the evaluation agent, but the **metric_gate** node selects a single
-`metric` + `direction` + `min_delta` (MVP is not multi-objective). Eval script
-nodes reject candidates that modify configured protected paths before the
-evaluator runs.
+and the evaluation agent. The **metric_gate** defaults to a single `metric` +
+`direction` + `min_delta` (scalar). Set `policy: "pareto"` with `objectives[]`
+for ε-frontier KEEP/DISCARD without auto-merge. Eval script nodes reject
+candidates that modify configured protected paths before the evaluator runs.
 
 ## Ports
 

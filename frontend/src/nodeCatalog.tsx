@@ -142,6 +142,7 @@ Prefer one focused change over many simultaneous edits unless history shows a co
     color: '#36d399',
     icon: <Scale size={17} />,
     defaultConfig: {
+      policy: 'scalar',
       metric: 'score',
       direction: 'minimize',
       baseline: 5,
@@ -152,7 +153,7 @@ Prefer one focused change over many simultaneous edits unless history shows a co
   {
     type: 'git_decision',
     label: 'Git decision',
-    description: 'Accept, reject, or merge',
+    description: 'Accept/reject (scalar) or keep/discard (pareto)',
     color: '#fb7185',
     icon: <GitMerge size={17} />,
     defaultConfig: { model: DEFAULT_MODEL },

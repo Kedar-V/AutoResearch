@@ -1,5 +1,7 @@
 import type {
   EvaluationRecord,
+  FrontierRead,
+  FrontierSelectRead,
   GitHubStatus,
   HandoffRead,
   HypothesisRecord,
@@ -110,6 +112,21 @@ export function listHypotheses(projectId: string) {
 
 export function listTrials(projectId: string) {
   return request<TrialRecord[]>(`/api/projects/${projectId}/trials`)
+}
+
+export function getFrontier(projectId: string) {
+  return request<FrontierRead>(`/api/projects/${projectId}/frontier`)
+}
+
+export function selectFrontierPoint(
+  projectId: string,
+  commit: string,
+  options?: { promote?: boolean },
+) {
+  return request<FrontierSelectRead>(`/api/projects/${projectId}/frontier/select`, {
+    method: 'POST',
+    body: JSON.stringify({ commit, promote: options?.promote ?? false }),
+  })
 }
 
 export function listEvaluations(projectId: string) {

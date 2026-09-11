@@ -476,6 +476,43 @@
 }
 
 .run-panel { padding: 10px 14px 18px; border-top: 1px solid var(--border); }
+
+.frontier-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.frontier-list li {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0a1019;
+  display: grid;
+  gap: 6px;
+}
+.frontier-list li.preferred { border-color: #36d39955; }
+.frontier-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+.frontier-meta code { color: #93a4ba; font-size: 10px; }
+.frontier-badge {
+  font-size: 9px;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--green);
+  background: rgba(54, 211, 153, 0.12);
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+.frontier-metrics { color: #93a4ba; font-size: 10px; }
+.button.small { padding: 4px 8px; font-size: 10px; width: max-content; }
+
 .run-status { width: max-content; border-radius: 999px; padding: 5px 9px; margin: 4px 0 10px; color: #93a4ba; background: #172131; font-size: 9px; font-weight: 800; text-transform: uppercase; }
 .run-status.succeeded { color: var(--green); background: rgba(54,211,153,.1); }
 .run-status.failed { color: var(--danger); background: rgba(251,113,133,.1); }

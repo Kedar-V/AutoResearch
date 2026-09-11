@@ -141,6 +141,7 @@ class ProjectRead(BaseModel):
     local_path: str
     pg_schema: str
     status: str
+    preferred_base_commit: str | None = None
     created_at: datetime
 
 
@@ -183,6 +184,30 @@ class TrialRead(BaseModel):
     what_changed: str
     metrics: dict[str, Any]
     created_at: datetime
+
+
+class FrontierPointRead(BaseModel):
+    commit: str
+    trial_id: str
+    metrics: dict[str, float]
+    created_at: datetime
+
+
+class FrontierRead(BaseModel):
+    points: list[FrontierPointRead] = Field(default_factory=list)
+    preferred_base_commit: str | None = None
+
+
+class FrontierSelect(BaseModel):
+    commit: str = Field(min_length=7, max_length=64)
+    promote: bool = False
+
+
+class FrontierSelectRead(BaseModel):
+    project: ProjectRead
+    preferred_base_commit: str
+    promoted: bool = False
+    champion_commit: str | None = None
 
 
 class HandoffRead(BaseModel):

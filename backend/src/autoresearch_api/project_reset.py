@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from .models import (
     ChatMessage,
     ChatSummary,
+    FrontierPointRecord,
     HypothesisRecord,
     Metric,
     NodeRun,
@@ -97,7 +98,7 @@ def wipe_local_git_experiments(repo: Path, *, champion_branch: str, runtime_root
             _git(repo, "branch", "-D", branch)
             stats.branches.append(branch)
 
-    tags = _git(repo, "tag", "-l", "accepted/*", "rejected/*", "failed/*", check=False)
+    tags = _git(repo, "tag", "-l", "accepted/*", "rejected/*", "failed/*", "frontier/*", check=False)
     for tag in [t for t in tags.splitlines() if t]:
         with contextlib.suppress(ProjectResetError):
             _git(repo, "tag", "-d", tag)
@@ -108,6 +109,7 @@ def wipe_local_git_experiments(repo: Path, *, champion_branch: str, runtime_root
         "research/decisions",
         "research/evaluations",
         "research/champions",
+        "research/frontier",
     ):
         notes = _git(repo, "notes", f"--ref={ref}", "list", check=False)
         for line in notes.splitlines():
@@ -154,7 +156,15 @@ def wipe_remote_git_experiments(repo: Path) -> WipeStats:
             stats.branches.append(branch)
 
     tags = _git(
-        repo, "ls-remote", "--tags", "origin", "accepted/*", "rejected/*", "failed/*", check=False
+        repo,
+        "ls-remote",
+        "--tags",
+        "origin",
+        "accepted/*",
+        "rejected/*",
+        "failed/*",
+        "frontier/*",
+        check=False,
     )
     seen: set[str] = set()
     for line in tags.splitlines():
@@ -179,7 +189,9 @@ def wipe_remote_git_experiments(repo: Path) -> WipeStats:
             stats.tags.append(tag)
 
     # Drop any tags fetch recreated locally
-    local_tags = _git(repo, "tag", "-l", "accepted/*", "rejected/*", "failed/*", check=False)
+    local_tags = _git(
+        repo, "tag", "-l", "accepted/*", "rejected/*", "failed/*", "frontier/*", check=False
+    )
     for tag in [t for t in local_tags.splitlines() if t]:
         _git(repo, "tag", "-d", tag, check=False)
     return stats
@@ -200,8 +212,13 @@ def wipe_project_database(session: Session, project_id: str) -> int:
 
     session.execute(delete(TrialRecord).where(TrialRecord.project_id == project_id))
     session.execute(delete(HypothesisRecord).where(HypothesisRecord.project_id == project_id))
+    session.execute(delete(FrontierPointRecord).where(FrontierPointRecord.project_id == project_id))
     session.execute(delete(ChatMessage).where(ChatMessage.project_id == project_id))
     session.execute(delete(ChatSummary).where(ChatSummary.project_id == project_id))
+    project = session.get(Project, project_id)
+    if project is not None:
+        project.preferred_base_commit = None
+        project.updated_at = utcnow()
     if run_ids:
         session.execute(delete(Run).where(Run.id.in_(run_ids)))
     return len(run_ids)

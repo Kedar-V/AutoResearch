@@ -21,6 +21,7 @@ from .hypothesis_planner import HypothesisPlanError, plan_hypothesis
 from .memory import retain_research_lesson
 from .models import (
     ChatSummary,
+    FrontierPointRecord,
     HypothesisRecord,
     Metric,
     NodeRun,
@@ -28,6 +29,13 @@ from .models import (
     Run,
     TrialRecord,
     Workflow,
+)
+from .pareto import (
+    FrontierPoint as ParetoPoint,
+    hard_gates_ok,
+    parse_hard_gates,
+    parse_objectives,
+    update_frontier,
 )
 from .run_control import RunCancelled, create_controller, get_controller, remove_controller
 from .runner import LocalRunner, RunnerError
@@ -261,7 +269,7 @@ class WorkflowExecutor:
         if node.type == "evaluation":
             return self._dispatch_evaluation(session, run, node, context, workflow)
         if node.type == "metric_gate":
-            return self._dispatch_metric_gate(context, node)
+            return self._dispatch_metric_gate(session, run, context, node)
         if node.type == "git_decision":
             return self._dispatch_git_decision(session, run, context)
         if node.type == "database":
@@ -347,6 +355,7 @@ class WorkflowExecutor:
             hypothesis_code,
             title,
             description,
+            base_commit=self._resolve_hypothesis_base(session, project_id, gate_config),
         )
         context.update(
             hypothesis_id=hypothesis_code,
@@ -725,11 +734,21 @@ class WorkflowExecutor:
         return record, record["summary"], ""
 
     def _dispatch_metric_gate(
-        self, context: dict[str, Any], node: WorkflowNode
+        self,
+        session: Session,
+        run: Run,
+        context: dict[str, Any],
+        node: WorkflowNode,
     ) -> tuple[dict[str, Any], str, str]:
         metrics = context.get("metrics")
         if not isinstance(metrics, dict):
             raise ExecutionError("metric gate requires evaluation metrics")
+        policy = str(node.config.get("policy") or "scalar").lower()
+        if policy == "pareto":
+            return self._dispatch_pareto_gate(session, run, context, node, metrics)
+        if policy not in {"scalar", ""}:
+            raise ExecutionError(f"unsupported metric gate policy {policy!r}")
+
         metric = str(node.config.get("metric") or "score")
         if metric not in metrics:
             raise ExecutionError(f"metric {metric!r} was not emitted")
@@ -752,10 +771,17 @@ class WorkflowExecutor:
             if direction == "maximize"
             else value <= baseline - min_delta
         )
-        context.update(gate_passed=accepted, gate_metric=metric, gate_baseline=baseline)
+        context.update(
+            gate_passed=accepted,
+            gate_metric=metric,
+            gate_baseline=baseline,
+            gate_policy="scalar",
+            frontier_action=None,
+        )
         return (
             {
                 "accepted": accepted,
+                "policy": "scalar",
                 "metric": metric,
                 "value": value,
                 "baseline": baseline,
@@ -765,11 +791,178 @@ class WorkflowExecutor:
             "",
         )
 
+    def _dispatch_pareto_gate(
+        self,
+        session: Session,
+        run: Run,
+        context: dict[str, Any],
+        node: WorkflowNode,
+        metrics: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, str]:
+        project_id = run.project_id or context.get("project_id")
+        if not project_id:
+            raise ExecutionError("pareto gate requires a project_id")
+        try:
+            objectives = parse_objectives(node.config.get("objectives"))
+            hard_gates = parse_hard_gates(node.config.get("hard_gates"))
+        except ValueError as exc:
+            raise ExecutionError(str(exc)) from exc
+
+        ok, reason = hard_gates_ok(metrics, hard_gates)
+        if not ok:
+            context.update(
+                gate_passed=False,
+                gate_metric=",".join(obj.metric for obj in objectives),
+                gate_baseline=None,
+                gate_policy="pareto",
+                frontier_action="discard",
+                gate_reason=reason,
+            )
+            return (
+                {
+                    "accepted": False,
+                    "policy": "pareto",
+                    "frontier_action": "discard",
+                    "reason": reason,
+                    "objectives": [obj.metric for obj in objectives],
+                },
+                "",
+                "",
+            )
+
+        for objective in objectives:
+            if objective.metric not in metrics:
+                raise ExecutionError(f"pareto objective metric {objective.metric!r} was not emitted")
+            try:
+                float(metrics[objective.metric])
+            except (TypeError, ValueError) as exc:
+                raise ExecutionError(
+                    f"pareto objective metric {objective.metric!r} is not numeric"
+                ) from exc
+
+        rows = list(
+            session.scalars(
+                select(FrontierPointRecord)
+                .where(FrontierPointRecord.project_id == project_id)
+                .order_by(FrontierPointRecord.created_at.asc())
+            )
+        )
+        frontier = [
+            ParetoPoint(
+                commit=row.commit,
+                trial_id=row.trial_id,
+                metrics={k: float(v) for k, v in (row.metrics or {}).items()},
+            )
+            for row in rows
+        ]
+        candidate_commit = str(context.get("candidate_commit") or "")
+        trial_id = str(context.get("trial_id") or "")
+        if not candidate_commit or not trial_id:
+            raise ExecutionError("pareto gate requires candidate_commit and trial_id")
+        objective_metrics = {obj.metric: float(metrics[obj.metric]) for obj in objectives}
+        candidate = ParetoPoint(
+            commit=candidate_commit,
+            trial_id=trial_id,
+            metrics=objective_metrics,
+        )
+        try:
+            kept, next_frontier = update_frontier(frontier, candidate, objectives)
+        except KeyError as exc:
+            raise ExecutionError(f"pareto gate missing metric {exc}") from exc
+
+        if kept:
+            self._persist_frontier(session, project_id, next_frontier)
+            context.update(
+                gate_passed=True,
+                gate_metric=",".join(obj.metric for obj in objectives),
+                gate_baseline=None,
+                gate_policy="pareto",
+                frontier_action="keep",
+                gate_reason="not ε-dominated; kept on frontier",
+                frontier_snapshot=[point.as_dict() for point in next_frontier],
+            )
+        else:
+            context.update(
+                gate_passed=False,
+                gate_metric=",".join(obj.metric for obj in objectives),
+                gate_baseline=None,
+                gate_policy="pareto",
+                frontier_action="discard",
+                gate_reason="ε-dominated by existing frontier point",
+                frontier_snapshot=[point.as_dict() for point in next_frontier],
+            )
+        return (
+            {
+                "accepted": kept,
+                "policy": "pareto",
+                "frontier_action": "keep" if kept else "discard",
+                "reason": context.get("gate_reason"),
+                "objectives": [obj.metric for obj in objectives],
+                "frontier": [point.as_dict() for point in next_frontier],
+            },
+            "",
+            "",
+        )
+
+    def _persist_frontier(
+        self, session: Session, project_id: str, frontier: list[ParetoPoint]
+    ) -> None:
+        existing = list(
+            session.scalars(
+                select(FrontierPointRecord).where(FrontierPointRecord.project_id == project_id)
+            )
+        )
+        keep_commits = {point.commit for point in frontier}
+        for row in existing:
+            if row.commit not in keep_commits:
+                self.git.delete_frontier_tag(row.trial_id)
+                session.delete(row)
+        by_commit = {row.commit: row for row in existing if row.commit in keep_commits}
+        for point in frontier:
+            row = by_commit.get(point.commit)
+            if row is None:
+                session.add(
+                    FrontierPointRecord(
+                        project_id=project_id,
+                        commit=point.commit,
+                        trial_id=point.trial_id,
+                        metrics=dict(point.metrics),
+                    )
+                )
+            else:
+                row.trial_id = point.trial_id
+                row.metrics = dict(point.metrics)
+        session.commit()
+        self.git.write_frontier_manifest([point.as_dict() for point in frontier])
+
+    def _resolve_hypothesis_base(
+        self,
+        session: Session,
+        project_id: str,
+        gate_config: dict[str, Any] | None,
+    ) -> str | None:
+        """For Pareto: preferred base → latest KEEP → champion HEAD (None = champion)."""
+        if not gate_config or str(gate_config.get("policy") or "").lower() != "pareto":
+            return None
+        project = session.get(Project, project_id)
+        if project is not None and project.preferred_base_commit:
+            return project.preferred_base_commit
+        latest = session.scalar(
+            select(FrontierPointRecord)
+            .where(FrontierPointRecord.project_id == project_id)
+            .order_by(FrontierPointRecord.created_at.desc())
+        )
+        return latest.commit if latest is not None else None
+
     def _dispatch_git_decision(
         self, session: Session, run: Run, context: dict[str, Any]
     ) -> tuple[dict[str, Any], str, str]:
         workspace = self._workspace(context)
         self._require(context, "candidate_commit", "hypothesis_base_commit", "gate_passed")
+        policy = str(context.get("gate_policy") or "scalar")
+        if policy == "pareto":
+            return self._dispatch_pareto_decision(session, run, context, workspace)
+
         accepted = bool(context["gate_passed"])
         outcome = "accepted" if accepted else "rejected"
         reason = (
@@ -785,9 +978,10 @@ class WorkflowExecutor:
             "outcome": outcome,
             "reason": reason,
             "metrics": context.get("metrics", {}),
+            "policy": "scalar",
             "created_at": datetime.now(UTC).isoformat(),
         }
-        output: dict[str, Any] = {"outcome": outcome}
+        output: dict[str, Any] = {"outcome": outcome, "policy": "scalar"}
         if accepted:
             # Merge before note/tag so a dirty or advanced champion cannot leave an
             # accepted ledger without promoting the trial onto the champion branch.
@@ -833,6 +1027,82 @@ class WorkflowExecutor:
                 "Merged into champion; next hypothesis uses new master."
                 if accepted
                 else "Rejected; next hypothesis uses last stable master."
+            ),
+            what_changed=f"{change_note} ({reason})" if change_note else reason,
+        )
+        return output, "", ""
+
+    def _dispatch_pareto_decision(
+        self,
+        session: Session,
+        run: Run,
+        context: dict[str, Any],
+        workspace: TrialWorkspace,
+    ) -> tuple[dict[str, Any], str, str]:
+        kept = bool(context["gate_passed"])
+        outcome = "kept" if kept else "discarded"
+        reason = str(context.get("gate_reason") or (
+            "kept on Pareto frontier" if kept else "discarded from Pareto frontier"
+        ))
+        record = {
+            "schema_version": "1",
+            "trial_id": workspace.trial_id,
+            "candidate_commit": context["candidate_commit"],
+            "baseline_commit": context["hypothesis_base_commit"],
+            "outcome": outcome,
+            "reason": reason,
+            "metrics": context.get("metrics", {}),
+            "policy": "pareto",
+            "frontier_action": "keep" if kept else "discard",
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        output: dict[str, Any] = {
+            "outcome": outcome,
+            "policy": "pareto",
+            "frontier_action": "keep" if kept else "discard",
+        }
+        if kept:
+            tag = self.git.tag_frontier(workspace.trial_id, context["candidate_commit"])
+            output["tag"] = tag
+            self.git.add_note(
+                "research/frontier",
+                context["candidate_commit"],
+                {
+                    "schema_version": "1",
+                    "trial_id": workspace.trial_id,
+                    "commit": context["candidate_commit"],
+                    "metrics": context.get("metrics", {}),
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        else:
+            tag = self.git.tag_decision("rejected", workspace.trial_id, context["candidate_commit"])
+            output["tag"] = tag
+        self.git.add_note("research/decisions", context["candidate_commit"], record)
+        try:
+            output["remote"] = self.git.push_research_to_origin()
+        except GitError as exc:
+            output["remote"] = {"pushed": False, "error": str(exc)}
+        context["last_decision"] = outcome
+        context["last_metrics"] = context.get("metrics", {})
+        prior_change = ""
+        trial_id = context.get("trial_id")
+        project_id = context.get("project_id")
+        if trial_id and project_id:
+            existing = session.get(TrialRecord, f"{project_id}:{trial_id}")
+            if existing is not None:
+                prior_change = existing.what_changed or ""
+        change_note = prior_change if prior_change and not prior_change.startswith("metric gate") else ""
+        if not change_note:
+            change_note = summarize_diff(str(context.get("candidate_diff") or ""))
+        self._update_trial_record(
+            session,
+            context,
+            outcome=outcome,
+            next_step=(
+                "Kept on frontier; next hypothesis seeds from preferred base or latest KEEP."
+                if kept
+                else "Discarded; next hypothesis uses preferred base or latest KEEP."
             ),
             what_changed=f"{change_note} ({reason})" if change_note else reason,
         )
@@ -906,6 +1176,7 @@ class WorkflowExecutor:
         if record is None:
             return
         accepted = bool(context.get("gate_passed"))
+        policy = str(context.get("gate_policy") or "scalar")
         trial_rows = list(
             session.scalars(
                 select(TrialRecord).where(
@@ -921,7 +1192,10 @@ class WorkflowExecutor:
             trial_notes=[self._trial_dict(row) for row in trial_rows],
             evaluation_summary=str(context.get("evaluation_summary") or "") or None,
         )
-        record.status = "accepted" if accepted else "rejected"
+        if policy == "pareto":
+            record.status = "kept" if accepted else "discarded"
+        else:
+            record.status = "accepted" if accepted else "rejected"
         record.metrics = context.get("metrics") or {}
         record.what_worked = what_worked
         record.what_did_not = what_did_not

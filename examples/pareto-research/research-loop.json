@@ -1,0 +1,97 @@
+{
+  "schema_version": "1",
+  "id": "pareto-research-loop",
+  "name": "Pareto research loop",
+  "description": "Opt-in ε-Pareto gate over score and cost; KEEP without auto-merge.",
+  "nodes": [
+    {
+      "id": "hypothesis",
+      "type": "hypothesis",
+      "name": "Improve score vs cost",
+      "position": { "x": 0, "y": 0 },
+      "config": {
+        "title": "Trade score against cost",
+        "description": "Lower score.txt while watching cost.txt growth.",
+        "system_prompt": "Propose an edit to score.txt / train.py that improves the frontier tradeoff between score and cost.",
+        "model": "composer-2.5",
+        "max_retries": 1,
+        "max_hypotheses": 5,
+        "history_window": 10
+      }
+    },
+    {
+      "id": "execution",
+      "type": "execution",
+      "name": "Train candidate",
+      "position": { "x": 280, "y": 0 },
+      "config": {
+        "command": ["python", "train.py"],
+        "timeout_seconds": 30,
+        "commit_message": "trial: update score/cost",
+        "allowed_paths": ["score.txt", "cost.txt", "train.py"]
+      }
+    },
+    {
+      "id": "eval_script",
+      "type": "eval_script",
+      "name": "Evaluate candidate",
+      "position": { "x": 280, "y": 180 },
+      "config": {
+        "command": ["python", "eval.py"],
+        "timeout_seconds": 30,
+        "protected_paths": ["eval.py", "tests", ".research"]
+      }
+    },
+    {
+      "id": "evaluation",
+      "type": "evaluation",
+      "name": "Evaluation agent",
+      "position": { "x": 560, "y": 0 },
+      "config": {
+        "system_prompt": "Summarize score vs cost movement for frontier keep/discard.",
+        "model": "composer-2.5"
+      }
+    },
+    {
+      "id": "gate",
+      "type": "metric_gate",
+      "name": "Pareto frontier",
+      "position": { "x": 840, "y": 0 },
+      "config": {
+        "policy": "pareto",
+        "objectives": [
+          { "metric": "score", "direction": "minimize", "epsilon": 0.01 },
+          { "metric": "cost", "direction": "minimize", "epsilon": 1 }
+        ],
+        "hard_gates": [
+          { "metric": "score", "finite": true },
+          { "metric": "cost", "finite": true },
+          { "metric": "ok", "equals": 1 }
+        ]
+      }
+    },
+    {
+      "id": "decision",
+      "type": "git_decision",
+      "name": "Record decision",
+      "position": { "x": 1120, "y": 0 },
+      "config": {}
+    },
+    {
+      "id": "database",
+      "type": "database",
+      "name": "DB",
+      "position": { "x": 560, "y": 220 },
+      "config": {}
+    }
+  ],
+  "edges": [
+    { "id": "hypothesis-to-execution", "source": "hypothesis", "target": "execution", "source_port": "output", "target_port": "input" },
+    { "id": "execution-to-eval", "source": "execution", "target": "eval_script", "source_port": "output", "target_port": "input" },
+    { "id": "eval-to-evaluation", "source": "eval_script", "target": "evaluation", "source_port": "output", "target_port": "input" },
+    { "id": "evaluation-to-gate", "source": "evaluation", "target": "gate", "source_port": "output", "target_port": "input" },
+    { "id": "gate-to-decision", "source": "gate", "target": "decision", "source_port": "output", "target_port": "input" },
+    { "id": "decision-to-hypothesis", "source": "decision", "target": "hypothesis", "source_port": "output", "target_port": "input" },
+    { "id": "execution-heal", "source": "execution", "target": "hypothesis", "source_port": "output", "target_port": "input" }
+  ]
+}

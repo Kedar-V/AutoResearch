@@ -77,10 +77,11 @@ class GitService:
         description: str,
         *,
         files: dict[str, str] | None = None,
+        base_commit: str | None = None,
     ) -> tuple[str, str]:
         slug = self._slug(title)
         branch = f"hypothesis/{hypothesis_id}-{slug}"
-        base_commit = self.head(self.champion_branch)
+        base_commit = base_commit or self.head(self.champion_branch)
         tree = (
             self._write_tree_with_files(base_commit, files)
             if files
@@ -195,6 +196,27 @@ class GitService:
         tag = f"{outcome}/{safe_trial}"
         self._git("tag", "-f", tag, commit)
         return tag
+
+    def tag_frontier(self, trial_id: str, commit: str) -> str:
+        safe_trial = trial_id.replace("/", "-")
+        tag = f"frontier/{safe_trial}"
+        self._git("tag", "-f", tag, commit)
+        return tag
+
+    def delete_frontier_tag(self, trial_id: str) -> None:
+        safe_trial = trial_id.replace("/", "-")
+        with contextlib.suppress(GitError):
+            self._git("tag", "-d", f"frontier/{safe_trial}")
+
+    def write_frontier_manifest(self, points: list[dict[str, Any]]) -> None:
+        """Overwrite frontier note on champion tip (list of non-dominated points)."""
+        tip = self.head(self.champion_branch)
+        record = {
+            "schema_version": "1",
+            "points": points,
+            "updated_at": datetime.now(UTC).isoformat(),
+        }
+        self.add_note("research/frontier", tip, record)
 
     def merge_trial(self, trial_branch: str, hypothesis_base_commit: str) -> str:
         current_branch = self._git("branch", "--show-current")

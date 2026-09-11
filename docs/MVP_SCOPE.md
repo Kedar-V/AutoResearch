@@ -11,8 +11,9 @@ The MVP proves one complete research loop on a trusted local repository.
 - Hypothesis and trial branches from the configured champion branch (`master` by default)
 - Dedicated Git worktrees for trial execution; `allowed_paths` on the execution node
 - Trusted local subprocess execution with explicit environment and timeout controls
-- Structured evaluator output and a **single primary** maximize/minimize metric gate (`metric` + `direction` + `min_delta`); eval JSON may include extra metrics for display/agents, but the gate does not combine them
-- Git-backed hypothesis, evaluation, decision, and champions notes + decision tags
+- Structured evaluator output and a maximize/minimize **scalar** metric gate by default (`metric` + `direction` + `min_delta`); eval JSON may include extra metrics for display/agents
+- Opt-in **ε-Pareto** gate (`policy: "pareto"` + `objectives` + optional `hard_gates`): KEEP non-dominated trials on a frontier (no auto-merge); human picks next hypothesis base via API/UI
+- Git-backed hypothesis, evaluation, decision, champions, and frontier notes + decision/frontier tags
 - PostgreSQL as preferred SoR (projects, workflows, runs, hypotheses, trials, chat handoff); SQLite for tests
 - Optional Cursor/OpenAI agents: planner (`use_planner`), execution edits (`use_agent`), evaluation judgments (`use_agent` + optional explainability schema)
 - Optional Langfuse observability via `AgentObservability` (`noop` | `langfuse-*`)
@@ -32,7 +33,7 @@ The MVP proves one complete research loop on a trusted local repository.
 - MCP tool nodes
 - Automatic rebase → re-eval → merge when the champion advances underfoot
 - Configurable trial ancestry (`sibling` / `chained` / `last_runnable`)
-- Multi-objective, Pareto, threshold-with-tolerance, or statistical-significance gate policies
+- Auto-pick utility over the frontier, judge-in-platform scores, archive crowding/pruning, threshold-with-tolerance, or statistical-significance gate policies
 - Multi-user authentication and real-time collaboration
 - Remote GPU scheduling
 - External content-addressed artifact storage
