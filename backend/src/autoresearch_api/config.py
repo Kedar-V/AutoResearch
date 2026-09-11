@@ -21,7 +21,8 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:5173"
     script_timeout_seconds: int = 300
     protected_paths: str = "eval.py,tests,.research"
-    github_owner: str = "Kedar-V"
+    # Empty = use `gh api user` login when creating private GitHub repos.
+    github_owner: str = ""
     # Agent observability (explainability). Default noop — core loop works without Langfuse.
     # Select: noop | langfuse-cloud | langfuse-selfhost | langfuse (generic host+keys)
     observability_backend: str = "noop"

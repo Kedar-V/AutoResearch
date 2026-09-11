@@ -108,7 +108,7 @@ Briefs inject an advisory Memory section; outcomes and handoff call retain.
 - Python 3.11+ and `uv`
 - Node.js 20+ and npm
 - Git user name/email in every target repository
-- Optional: Docker (Postgres + Langfuse), `gh` (New Project → private GitHub repo)
+- Optional: Docker (Postgres + Langfuse), `gh` (optional private GitHub remotes)
 
 ## Installation and running
 
@@ -144,6 +144,16 @@ Langfuse’s Postgres (if used) is on host **5434**, not 5432. Never point `AUTO
 ## Example
 
 [`examples/basic-research`](examples/basic-research) starts `score.txt` at `5.0`. Each accepted hypothesis decrements the score by one via `train.py` until `0.0` across five hypotheses. The evaluator prints `{"metrics": {"score": <number>}}`. The starter recipe includes `execution → eval_script` so the post-trial spine compiles.
+
+**New project** (UI or `POST /api/projects`):
+
+| `source` | Behavior |
+|----------|----------|
+| `seed` (default) | Local math fixture; optional private GitHub via connected `gh` |
+| `local` | Register an existing Git repo root (`local_path`) |
+| `git` | Clone `git_url` into `.autoresearch/projects/<name>/` |
+
+`GET /api/github/status` reports whether `gh` is installed/authenticated and which owner would be used (`AUTORESEARCH_GITHUB_OWNER` or `gh` login — never a hardcoded personal account).
 
 Bench projects under `.autoresearch/projects/` (e.g. `tinylm-bench`) use the same control plane with richer train/eval loops.
 

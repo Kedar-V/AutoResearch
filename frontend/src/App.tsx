@@ -24,6 +24,7 @@ import {
   createProject,
   createRun,
   getActiveProject,
+  getGitHubStatus,
   getRun,
   getWorkflow,
   listEvaluations,
@@ -57,6 +58,7 @@ import type {
   HypothesisRecord,
   NodeRunRead,
   ProjectRead,
+  ProjectSource,
   RunRead,
   TrialRecord,
   WorkflowDefinition,
@@ -99,6 +101,19 @@ function CanvasApp() {
   const [dbOpen, setDbOpen] = useState(false)
   const [projectName, setProjectName] = useState('')
   const [projectDialog, setProjectDialog] = useState(false)
+  const [projectSource, setProjectSource] = useState<ProjectSource>('seed')
+  const [createGithub, setCreateGithub] = useState(false)
+  const [importLocalPath, setImportLocalPath] = useState('')
+  const [importGitUrl, setImportGitUrl] = useState('')
+  const [githubStatus, setGithubStatus] = useState<{
+    gh_installed: boolean
+    authenticated: boolean
+    login: string | null
+    configured_owner: string | null
+    resolved_owner: string | null
+    hint: string
+  } | null>(null)
+  const [creatingProject, setCreatingProject] = useState(false)
   const [restarting, setRestarting] = useState(false)
 
   const selected = nodes.find((node) => node.id === selectedId) ?? null
@@ -563,9 +578,47 @@ function CanvasApp() {
     }
   }
 
+  useEffect(() => {
+    if (!projectDialog) return
+    getGitHubStatus()
+      .then((status) => {
+        setGithubStatus(status)
+        if (!status.authenticated) setCreateGithub(false)
+      })
+      .catch(() => {
+        setGithubStatus({
+          gh_installed: false,
+          authenticated: false,
+          login: null,
+          configured_owner: null,
+          resolved_owner: null,
+          hint: 'Could not reach API for GitHub status.',
+        })
+        setCreateGithub(false)
+      })
+  }, [projectDialog])
+
+  const openProjectDialog = () => {
+    setProjectName('')
+    setProjectSource('seed')
+    setCreateGithub(false)
+    setImportLocalPath('')
+    setImportGitUrl('')
+    setProjectDialog(true)
+  }
+
   const handleCreateProject = async () => {
+    const name = projectName.trim()
+    if (!/^[A-Za-z0-9._-]+$/.test(name)) return
+    setCreatingProject(true)
     try {
-      const created = await createProject(projectName.trim())
+      const created = await createProject({
+        name,
+        source: projectSource,
+        create_github: projectSource === 'git' ? false : createGithub,
+        local_path: projectSource === 'local' ? importLocalPath.trim() : null,
+        git_url: projectSource === 'git' ? importGitUrl.trim() : null,
+      })
       setProject(created)
       setProjects(await listProjects())
       setProjectDialog(false)
@@ -574,11 +627,24 @@ function CanvasApp() {
       setTrials([])
       setActiveRun(null)
       await loadProjectWorkflow(created)
-      setNotice(`Created private project ${created.name}`)
+      const remoteNote = created.github_url ? ` · ${created.github_url}` : ' · local only'
+      setNotice(`Project ${created.name} ready${remoteNote}`)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Could not create project')
+    } finally {
+      setCreatingProject(false)
     }
   }
+
+  const canSubmitProject = (() => {
+    if (!/^[A-Za-z0-9._-]+$/.test(projectName.trim())) return false
+    if (projectSource === 'local' && !importLocalPath.trim()) return false
+    if (projectSource === 'git' && !importGitUrl.trim()) return false
+    if (createGithub && projectSource !== 'git' && githubStatus && !githubStatus.authenticated) {
+      return false
+    }
+    return true
+  })()
 
   return (
     <main className="app-shell">
@@ -631,7 +697,7 @@ function CanvasApp() {
               ? `${runProgress.overallCurrent}/${runProgress.overallTotal} trials · ${notice}`
               : notice}
           </span>
-          <button className="button secondary" onClick={() => setProjectDialog(true)}>
+          <button className="button secondary" onClick={openProjectDialog}>
             <FolderPlus size={16} />New project
           </button>
           <button className="button secondary" onClick={handleSave}><Save size={16} />Save</button>
@@ -880,24 +946,125 @@ function CanvasApp() {
 
       {projectDialog && (
         <div className="slide-root">
-          <button className="slide-backdrop" aria-label="Close" onClick={() => setProjectDialog(false)} />
-          <div className="dialog">
+          <button
+            className="slide-backdrop"
+            aria-label="Close"
+            onClick={() => setProjectDialog(false)}
+          />
+          <div className="dialog project-dialog">
             <h2>New project</h2>
-            <p className="muted">Creates a private GitHub repo and a dedicated Postgres schema.</p>
+            <p className="muted">
+              Start from the toy seed, import a local Git repo, or clone a remote.
+              GitHub is optional.
+            </p>
+
+            <div className="source-tabs" role="tablist" aria-label="Project source">
+              {(
+                [
+                  ['seed', 'Toy seed'],
+                  ['local', 'Import local'],
+                  ['git', 'Clone URL'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={projectSource === value}
+                  className={`source-tab${projectSource === value ? ' active' : ''}`}
+                  onClick={() => {
+                    setProjectSource(value)
+                    if (value === 'git') setCreateGithub(false)
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
             <label>
-              Repository name
+              Project name
               <input
                 value={projectName}
                 onChange={(event) => setProjectName(event.target.value)}
                 placeholder="score-descent"
               />
             </label>
+
+            {projectSource === 'local' && (
+              <label>
+                Local Git repository path
+                <input
+                  value={importLocalPath}
+                  onChange={(event) => setImportLocalPath(event.target.value)}
+                  placeholder="/path/to/your/repo"
+                />
+              </label>
+            )}
+
+            {projectSource === 'git' && (
+              <label>
+                Git URL
+                <input
+                  value={importGitUrl}
+                  onChange={(event) => setImportGitUrl(event.target.value)}
+                  placeholder="https://github.com/you/repo.git"
+                />
+              </label>
+            )}
+
+            {projectSource === 'seed' && (
+              <p className="muted">
+                Seeds a local math fixture (score.txt / train.py / eval.py) under
+                .autoresearch/projects.
+              </p>
+            )}
+
+            <div className={`github-status ${githubStatus?.authenticated ? 'ok' : 'warn'}`}>
+              <strong>GitHub CLI</strong>
+              <p className="muted">
+                {githubStatus?.hint ?? 'Checking GitHub CLI status…'}
+              </p>
+              {githubStatus && !githubStatus.authenticated && (
+                <pre className="github-hint">
+                  {githubStatus.gh_installed
+                    ? 'gh auth login -h github.com -p https -w'
+                    : 'brew install gh\ngh auth login -h github.com -p https -w'}
+                </pre>
+              )}
+            </div>
+
+            {projectSource !== 'git' && (
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={createGithub}
+                  disabled={!githubStatus?.authenticated}
+                  onChange={(event) => setCreateGithub(event.target.checked)}
+                />
+                <span>
+                  Create private GitHub repo
+                  {githubStatus?.resolved_owner
+                    ? ` under ${githubStatus.resolved_owner}`
+                    : ' (connect GitHub first)'}
+                </span>
+              </label>
+            )}
+
             <button
               className="button primary full"
-              disabled={!/^[A-Za-z0-9._-]+$/.test(projectName.trim())}
+              disabled={!canSubmitProject || creatingProject}
               onClick={handleCreateProject}
             >
-              Create private repo
+              {creatingProject
+                ? 'Creating…'
+                : projectSource === 'seed'
+                  ? createGithub
+                    ? 'Create seed + private repo'
+                    : 'Create local seed project'
+                  : projectSource === 'local'
+                    ? 'Import local repository'
+                    : 'Clone repository'}
             </button>
           </div>
         </div>

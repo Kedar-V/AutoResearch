@@ -3,9 +3,9 @@ name: autoresearch
 description: >-
   Operate the AutoResearch Git-native research loop (projects, runs, planner,
   execution agent, worktrees). Use when setting up Postgres or observability/Langfuse,
-  cleaning up or resetting a project run, restarting the API with keys,
-  starting tinylm/nanochat benches, or debugging hypothesis/trial ledger and
-  Git experiment refs.
+  connecting GitHub (gh auth), creating/importing projects, cleaning up or resetting
+  a project run, restarting the API with keys, starting tinylm/nanochat benches,
+  or debugging hypothesis/trial ledger and Git experiment refs.
 ---
 
 # AutoResearch
@@ -18,9 +18,15 @@ zero-setup smoke), runtime `.autoresearch/`, project clones
 ## Setup
 
 Use when the user says set up AutoResearch, configure the database, Postgres,
-Langfuse, enable tracing, or first-time observability. **For Langfuse, always
-ask which mode they want before writing env or starting containers.** Do not
-assume Cloud or self-host.
+Langfuse, enable tracing, first-time observability, **connect GitHub**, or
+create/import a project. **For Langfuse, always ask which mode they want before
+writing env or starting containers.** Do not assume Cloud or self-host.
+
+**For GitHub / New Project, always check connection status and guide the user
+before creating a private remote.** Do not assume `gh` is installed or logged
+in. Do **not** hardcode `AUTORESEARCH_GITHUB_OWNER` to a personal account
+(never `Kedar-V`). Leave it empty so the API uses `gh api user` login, or set
+it only to the user's confirmed login/org.
 
 Env file: `$ROOT/backend/.env` (never commit). Restart API after changes
 (`source backend/.env` then `make backend-dev`).
@@ -31,6 +37,78 @@ Env file: `$ROOT/backend/.env` (never commit). Restart API after changes
 cd "$ROOT"
 make backend-install   # includes postgres + observability (langfuse) extras
 ```
+
+### First-run: connect GitHub (prompt the user)
+
+When setting up AutoResearch, creating a project with a private GitHub remote,
+or the user asks about GitHub / `gh`, **ask and guide** — do not silently skip
+or invent an owner.
+
+Ask (one question):
+
+> Do you want AutoResearch to create private GitHub remotes for new projects?
+>
+> 1. **Yes** — connect GitHub CLI (`gh`) to your account (recommended for push
+>    of experiment branches/tags)
+> 2. **No** — local-only projects for now (you can import/clone later)
+
+#### If Yes — walk them through
+
+1. Check status (API if running, else CLI):
+
+```sh
+# Prefer API when backend is up:
+curl -s http://127.0.0.1:8000/api/github/status
+# Or CLI:
+command -v gh && gh auth status && gh api user --jq .login
+```
+
+2. If `gh` missing:
+
+```sh
+brew install gh   # macOS; otherwise https://cli.github.com
+```
+
+3. Authenticate (browser flow):
+
+```sh
+gh auth login -h github.com -p https -w
+```
+
+Explain: choose GitHub.com → HTTPS → Login with a web browser → paste the
+one-time code when prompted.
+
+4. Confirm login:
+
+```sh
+gh api user --jq .login
+curl -s http://127.0.0.1:8000/api/github/status
+```
+
+5. Env (optional override only):
+
+```sh
+# Leave empty to use the authenticated gh login:
+AUTORESEARCH_GITHUB_OWNER=
+# Or set explicitly to their login / org they can write to:
+# AUTORESEARCH_GITHUB_OWNER=their-login-or-org
+```
+
+Never write someone else's username. After env changes, restart the API with
+`source backend/.env`.
+
+6. In the UI **New project** dialog: pick Toy seed / Import local / Clone URL.
+   Check **Create private GitHub repo** only when status shows authenticated.
+   Owner shown is `resolved_owner` from `/api/github/status`.
+
+#### If No — local / import paths
+
+- **Toy seed**: local math fixture under `.autoresearch/projects/<name>/` (no remote).
+- **Import local**: register an existing Git repo root (`source=local`, `local_path=...`).
+- **Clone URL**: `git clone` into `.autoresearch/projects/<name>/` (`source=git`).
+
+GitHub remains optional later; they can push manually or recreate with
+`create_github` once `gh` is connected.
 
 ### PostgreSQL (preferred system of record)
 
@@ -94,12 +172,25 @@ docker compose -f ops/postgres/docker-compose.yml exec postgres \
 
 #### 4. Per-project Postgres schemas
 
-On **New Project**, the API:
+On **New Project** (seed / import local / clone), the API:
 
 1. Stores `projects.pg_schema = proj_<slug>` (`schema_name()`: lowercased
    alphanumerics → underscores, max 48 chars after `proj_`).
 2. When the dialect is PostgreSQL, runs:
    `CREATE SCHEMA IF NOT EXISTS "proj_<slug>"`.
+
+`POST /api/projects` body:
+
+| Field | Notes |
+|-------|--------|
+| `name` | required |
+| `source` | `seed` (default), `local`, or `git` |
+| `create_github` | optional; requires connected `gh`; ignored for `source=git` |
+| `local_path` | required for `source=local` (Git repo root) |
+| `git_url` | required for `source=git` |
+| `github_owner` | optional per-request override; else env / `gh` login |
+
+`GET /api/github/status` reports install + auth + `resolved_owner`.
 
 Today ORM tables still sit in **`public`** and are scoped by `project_id`.
 The `proj_*` schemas are reserved/registered for isolation / explorer use —
@@ -346,7 +437,8 @@ export AUTORESEARCH_CHAMPION_BRANCH='master'
 export AUTORESEARCH_ALLOWED_ORIGINS='http://localhost:5173'
 export AUTORESEARCH_SCRIPT_TIMEOUT_SECONDS='900'
 export AUTORESEARCH_PROTECTED_PATHS='eval.py,tests,.research'
-export AUTORESEARCH_GITHUB_OWNER='Kedar-V'
+# Leave empty to use `gh` login; never hardcode a personal owner.
+# export AUTORESEARCH_GITHUB_OWNER=''
 make backend-dev
 ```
 

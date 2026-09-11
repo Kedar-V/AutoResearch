@@ -33,7 +33,13 @@ from .project_reset import (
     wipe_remote_git_experiments,
     wiped_payload,
 )
-from .projects import ProjectError, active_project, create_project, set_active_project
+from .projects import (
+    ProjectError,
+    active_project,
+    create_project,
+    github_status,
+    set_active_project,
+)
 from .run_control import ensure_controller, get_controller, remove_controller
 from .runner import LocalRunner
 from .schemas import (
@@ -41,6 +47,7 @@ from .schemas import (
     EvaluationEvidence,
     EvaluationRead,
     EvaluationSignals,
+    GitHubStatusRead,
     HandoffRead,
     HypothesisRead,
     NodeTypeDefinition,
@@ -326,6 +333,20 @@ def resume_run(run_id: str, session: SessionDep) -> Run:
     return run
 
 
+@router.get("/github/status", response_model=GitHubStatusRead)
+def get_github_status() -> GitHubStatusRead:
+    settings = get_settings()
+    status = github_status(configured_owner=settings.github_owner)
+    return GitHubStatusRead(
+        gh_installed=status.gh_installed,
+        authenticated=status.authenticated,
+        login=status.login,
+        configured_owner=status.configured_owner,
+        resolved_owner=status.resolved_owner,
+        hint=status.hint,
+    )
+
+
 @router.get("/projects", response_model=list[ProjectRead])
 def list_projects(session: SessionDep) -> list[Project]:
     return list(session.scalars(select(Project).order_by(Project.created_at.desc())))
@@ -344,8 +365,13 @@ def post_project(payload: ProjectCreate, session: SessionDep) -> Project:
             session,
             name=payload.name,
             runtime_root=settings.runtime_root,
-            create_github=True,
+            source=payload.source,
+            create_github=payload.create_github,
             github_owner=settings.github_owner,
+            github_owner_override=payload.github_owner,
+            local_path=payload.local_path,
+            git_url=payload.git_url,
+            champion_branch=settings.champion_branch,
         )
     except ProjectError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

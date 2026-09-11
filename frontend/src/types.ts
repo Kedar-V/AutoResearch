@@ -100,6 +100,26 @@ export interface ProjectRead {
   created_at: string
 }
 
+export type ProjectSource = 'seed' | 'local' | 'git'
+
+export interface ProjectCreatePayload {
+  name: string
+  source?: ProjectSource
+  create_github?: boolean
+  local_path?: string | null
+  git_url?: string | null
+  github_owner?: string | null
+}
+
+export interface GitHubStatus {
+  gh_installed: boolean
+  authenticated: boolean
+  login: string | null
+  configured_owner: string | null
+  resolved_owner: string | null
+  hint: string
+}
+
 export interface ProjectRestartRead {
   project: ProjectRead
   run: RunRead

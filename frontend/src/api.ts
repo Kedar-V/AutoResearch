@@ -1,7 +1,9 @@
 import type {
   EvaluationRecord,
+  GitHubStatus,
   HandoffRead,
   HypothesisRecord,
+  ProjectCreatePayload,
   ProjectRead,
   ProjectRestartRead,
   RunRead,
@@ -75,11 +77,15 @@ export function getActiveProject() {
   return request<ProjectRead | null>('/api/projects/active')
 }
 
-export function createProject(name: string) {
+export function createProject(payload: ProjectCreatePayload) {
   return request<ProjectRead>('/api/projects', {
     method: 'POST',
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(payload),
   })
+}
+
+export function getGitHubStatus() {
+  return request<GitHubStatus>('/api/github/status')
 }
 
 export function activateProject(projectId: string) {

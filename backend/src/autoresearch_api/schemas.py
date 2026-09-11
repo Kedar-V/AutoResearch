@@ -116,6 +116,20 @@ class NodeTypeDefinition(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9._-]+$")
+    source: Literal["seed", "local", "git"] = "seed"
+    create_github: bool = False
+    local_path: str | None = None
+    git_url: str | None = None
+    github_owner: str | None = None
+
+
+class GitHubStatusRead(BaseModel):
+    gh_installed: bool
+    authenticated: bool
+    login: str | None = None
+    configured_owner: str | None = None
+    resolved_owner: str | None = None
+    hint: str
 
 
 class ProjectRead(BaseModel):
