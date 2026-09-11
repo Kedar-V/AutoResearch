@@ -10,12 +10,14 @@ cp backend/.env.example backend/.env
 uv run --project backend uvicorn autoresearch_api.main:app --reload --port 8000
 ```
 
-The default database is a persistent SQLite file. Set
-`AUTORESEARCH_DATABASE_URL` to the PostgreSQL URL from `.env.example` for the
-production-shaped local setup.
+Prefer PostgreSQL via Docker (`make postgres-up`) and `backend/.env` (see
+`.env.example`). The code default is SQLite so tests and smoke runs work
+without a local server.
+a private GitHub repo via `gh` when available, seeds the math fixture, and
+registers a `proj_<slug>` schema name (CREATE SCHEMA on Postgres).
 
-The configured project repository must be trusted: MVP commands run directly
-inside Git worktrees. Podman isolation is intentionally deferred.
+Hypothesis and trial rows are stored with `project_id` for handoff and the DB
+explorer. Git remains the branch/tag ledger.
 
 ## Evaluator contract
 
@@ -25,8 +27,8 @@ Evaluation commands must print exactly one JSON object to stdout:
 {"metrics": {"score": 0.42, "latency_ms": 12.7}}
 ```
 
-Metric values must be numbers. Evaluation nodes reject candidates that modify
-configured protected paths before the evaluator is executed.
+Metric values must be numbers. Eval script nodes reject candidates that modify
+configured protected paths before the evaluator runs.
 
 ## Checks
 

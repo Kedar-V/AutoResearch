@@ -1,0 +1,2 @@
+# Local secrets for `make langfuse-selfhost-up` (copy from .env.example)
+.env
