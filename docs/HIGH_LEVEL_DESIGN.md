@@ -130,6 +130,8 @@ Responsibilities:
 
 Hermes is a replaceable reasoning component. The platform supplies context derived from Git and PostgreSQL; Hermes memory is not the research ledger.
 
+Optional agent observability (default off) uses a vendor-agnostic `AgentObservability` port. Users select `noop`, `langfuse-cloud`, or `langfuse-selfhost` (local OSS via `ops/langfuse`). The Langfuse adapter stores full agent prompts/generations and heuristic scores; Git evaluation notes carry opaque `agent_trace_id` values so the vendor remains swappable. Scientific explainability (metrics, gates, decisions) stays in Git.
+
 ### 5.6 Git ledger
 
 Git is authoritative for source code, workflow definitions, ancestry, agent patches, evaluation policy, evaluator version, fingerprints, metrics, decisions, champion merges, and artifact manifests.

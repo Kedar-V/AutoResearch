@@ -8,7 +8,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="AUTORESEARCH_", env_file=".env")
+    model_config = SettingsConfigDict(
+        env_prefix="AUTORESEARCH_",
+        env_file=".env",
+        extra="ignore",
+    )
 
     database_url: str = "sqlite:///./autoresearch.db"
     project_root: Path = Path.cwd()
@@ -17,6 +21,14 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:5173"
     script_timeout_seconds: int = 300
     protected_paths: str = "eval.py,tests,.research"
+    github_owner: str = "Kedar-V"
+    # Agent observability (explainability). Default noop — core loop works without Langfuse.
+    # Select: noop | langfuse-cloud | langfuse-selfhost | langfuse (generic host+keys)
+    observability_backend: str = "noop"
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    # Cloud default; selfhost mode overrides to http://localhost:3000 when unset/cloud.
+    langfuse_host: str = "https://cloud.langfuse.com"
 
     @field_validator("project_root", "runtime_root", mode="before")
     @classmethod
