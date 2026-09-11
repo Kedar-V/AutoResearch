@@ -141,6 +141,27 @@ Ask (one question):
 Then apply **only** the chosen path. Core agents work in all modes; missing
 keys with a Langfuse mode selected falls back to noop soft-fail.
 
+### Agent memory (Honcho / Hindsight)
+
+Optional vendor memory for **preferences and soft lessons** only. Git + Postgres
+remain the research SoR. Port: `backend/src/autoresearch_api/memory/` (noop |
+honcho | hindsight | composite). Soft-fail like Langfuse.
+
+```sh
+# In backend/.env — pick one
+AUTORESEARCH_MEMORY_BACKEND=noop
+# AUTORESEARCH_MEMORY_BACKEND=honcho
+# AUTORESEARCH_HONCHO_API_KEY=...
+# AUTORESEARCH_HONCHO_WORKSPACE_ID=autoresearch
+# AUTORESEARCH_MEMORY_BACKEND=composite
+# AUTORESEARCH_MEMORY_PROVIDERS=honcho,hindsight
+```
+
+Install Honcho SDK when enabling it: `uv sync --project backend --extra memory`.
+Hindsight uses its own client package (install separately). Briefs inject a
+Memory section on recall; outcomes/handoff call retain. Never wipe vendor DBs
+on project Restart.
+
 Optional: create Langfuse prompts named `autoresearch/hypothesis`,
 `autoresearch/execution`, `autoresearch/evaluation` (code defaults until then).
 
